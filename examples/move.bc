@@ -1,0 +1,4 @@
+# Move a value from one register to another.
+# Destructive: From becomes 0
+loop: - From done
++ To prev

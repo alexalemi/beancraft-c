@@ -1,0 +1,6 @@
+# Multiply two numbers using the copy module
+
+init: - B clr
+use "copy" From=A To=Out
+- nil init self
+clr: - A halt self

@@ -1,0 +1,8 @@
+# Copy one register into another.
+
+deb tmp loop self
+loop: - From refill
++ To
++ tmp loop
+refill: - tmp done
++ From prev

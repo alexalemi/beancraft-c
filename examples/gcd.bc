@@ -1,0 +1,31 @@
+# Greatest Common Divisor using Euclidean subtraction
+# gcd(A, B) -> Out
+
+# Clear working registers
+clr1: - tmp clrOut self
+clrOut: - Out checkB self
+
+# If B=0, result is A
+checkB: - B copyA
++ B loop
+
+# Subtract smaller from larger until equal
+loop: - A aSmaller
+- B bSmaller
++ tmp loop
+
+# A hit zero: A was smaller, continue with A=tmp, B=B+1
+aSmaller: + B restoreToA
+
+restoreToA: - tmp checkB
++ A prev
+
+# B hit zero: B was smaller, continue with A=A+1, B=tmp
+bSmaller: + A restoreToB
+
+restoreToB: - tmp checkB
++ B prev
+
+# Copy A to Out
+copyA: - A done
++ Out prev

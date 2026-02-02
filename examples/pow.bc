@@ -1,0 +1,38 @@
+# Compute Base^Exp -> Out
+# Algorithm: Repeated multiplication
+# Note: 0^0 = 1
+
+# Clear working registers
+clr1: - tmp clr2 self
+clr2: - tmp2 clr3 self
+clr3: - t3 clrOut self
+clrOut: - Out setOne self
+
+# Initialize Out to 1
+setOne: + Out start
+
+# Each iteration: Out = Out * Base
+start: - Exp done
+
+# Multiply Out by Base: add Out to t3, Base times
+# First copy Base to tmp
+copyBase: - Base mulLoop
++ tmp prev
+
+# For each count in tmp, add Out to t3
+mulLoop: - tmp copyResult
+# Add Out to t3, restore Out via tmp2
+addOut: - Out contAdd
++ t3
++ tmp2 addOut
+
+contAdd: - tmp2 mulLoop
++ Out prev
+
+# Move t3 to Out
+copyResult: - t3 restoreBase
++ Out prev
+
+# Restore Base from tmp
+restoreBase: - tmp start
++ Base prev

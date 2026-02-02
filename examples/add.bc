@@ -1,0 +1,8 @@
+# A better syntax version of the add machine
+# this moves the contents of A and B into the Out register.
+
+init: - A copyB
++ Out prev
+
+copyB: - B done
++ Out prev

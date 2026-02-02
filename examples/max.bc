@@ -1,0 +1,28 @@
+# Find maximum of A and B -> Out
+
+# Clear working registers
+clr1: - tmp clrOut self
+clrOut: - Out loop self
+
+# Decrement both until one hits zero
+loop: - A aZero
+- B bZero
++ tmp loop
+
+# A hit zero first - B is larger (or equal if B also zero)
+# Out = tmp (common part) + remaining B
+aZero: - tmp addRemB
++ Out prev
+
+addRemB: - B done
++ Out prev
+
+# B hit zero first - A is larger
+# Restore A's extra, Out = tmp + remaining A
+bZero: + A copyTmpA
+
+copyTmpA: - tmp addRemA
++ Out prev
+
+addRemA: - A done
++ Out prev

@@ -1,0 +1,4 @@
+# Sets register Val to 100
+use "set4" Val=twenty_five
+use "mul" A=twenty_five B=4 Out=Val
+end

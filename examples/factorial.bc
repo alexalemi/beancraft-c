@@ -1,0 +1,45 @@
+# Compute N! -> Out
+# Approach: counter goes from N down to 1, multiply Out by counter each time
+
+# Clear working registers
+clr1: - tmp clr2 self
+clr2: - tmp2 clr3 self
+clr3: - t3 clrOut self
+clrOut: - Out clrCtr self
+clrCtr: - counter setOne self
+
+# Initialize Out = 1
+setOne: + Out copyN
+
+# Copy N to counter
+copyN: - N mainLoop
++ counter prev
+
+# Main loop: Out = Out * counter, then counter--
+mainLoop: - counter done
+
+# Clear t3 for this multiplication
+clrT3: - t3 mulStart self
+
+# Multiply Out by counter: result in t3
+# First copy counter to tmp (loop counter for mul)
+mulStart: - counter addLoop
++ tmp prev
+
+# For each tmp, add Out to t3
+addLoop: - tmp copyResult
+# Add Out to t3, using tmp2 to preserve Out
+addOut: - Out contAdd
++ t3
++ tmp2 addOut
+
+contAdd: - tmp2 addLoop
++ Out prev
+
+# Move t3 to Out
+copyResult: - t3 restoreCtr
++ Out prev
+
+# Restore counter from tmp
+restoreCtr: - tmp mainLoop
++ counter prev

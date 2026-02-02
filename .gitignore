@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# Executables
+beancraft
+libbcruntime.a
+
+# Generated files
+*.ssa
+*.s
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug
+*.dSYM/
+core
+vgcore.*
+
+# OS
+.DS_Store
+Thumbs.db

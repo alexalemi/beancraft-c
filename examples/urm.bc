@@ -1,0 +1,83 @@
+## A Universal register machine
+# This uses the following registers:
+#  * P - code of the register machine we want to run
+#  * A - the register contents
+#  * PC - the program counter
+#  * N - code of the current instruction
+#  * R - value of the current register 
+#  * S, T, Z - Auxillary registers
+
+func clear X {
+    - X done self
+}
+
+func copy From To {
+    # copy the contents of From into To (clears To, leaves From)
+    clear To
+    dup: - R rebuildFrom
+    + Z
+    + S dup
+
+    rebuildFrom: - Z done
+    + R prev
+}
+
+func push X List {
+    # push X onto the List
+    init: + Z
+    times2: - L moveL
+    + Z init
+
+    moveL: - Z expt
+    + L prev
+
+    expt: - X done times2
+}
+
+func pop List X jump {
+    # pop off the top value of List and put it into X
+    # if empty goto jump
+    init: - X next self
+    - L jump
+    + L
+    foo: - L write
+    + Z prev
+
+    write: - Z incX
+    - Z done
+    + L write
+
+    incX: + X foo
+}
+
+# At the start, put the whole program into a temporary buffer T
+init: copy P T
+
+# next, use the ProgramCounter to get at the current instruction
+pop T N halt
+- PC readCommand prev
+
+# Now, unpack the instruction, using our parity trick to figure out 
+# if it is either an inc or a deb instruction
+readCommand: pop N C halt
+readInstruction: pop A R next
+- C isInc
+- C isDeb
+push R S readInstruction
+
+# if its an inc, increment the current register
+isInc: + R 
+setJump: copy N PC rebuildRegister
+
+# if its a deb, correct for our off by one thing
+# and then setup the follow instruction
+isDeb: + N
+pop N PC next
+# decrement our register and if its zero, branch
+- R setJump rebuildRegister
+
+# now we have to rebuild the registers
+rebuildRegister: push R A
+pop S R init rebuildRegister
+# and loop
+

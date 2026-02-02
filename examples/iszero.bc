@@ -1,0 +1,9 @@
+# Check if N is zero -> Zero (1 if zero, 0 otherwise)
+
+# Clear Zero register
+clr: - Zero check self
+
+check: - N setZero
++ N done
+
+setZero: + Zero done

@@ -1,0 +1,15 @@
+# Division with modulo: A / B = Quotient, remainder in A
+# Copy B to temp, then repeatedly subtract
+
+# Copy divisor to temp for repeated subtraction
+copyB: deb B sub
+       inc temp prev
+
+sub: deb A done
+     deb temp restore
+     inc Quotient sub
+
+restore: deb Quotient done  
+         inc temp prev
+
+done: end

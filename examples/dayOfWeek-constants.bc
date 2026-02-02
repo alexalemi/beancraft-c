@@ -1,0 +1,87 @@
+# Day of week with constants set using initial values
+# This shows how much cleaner it is vs hundreds of manual inc statements
+
+deb Out next self
+deb tmp next self
+deb tmp2 next self
+
+copyMonth: deb Month refillMonth
+inc tmp
+inc tmp2 copyMonth
+refillMonth: deb tmp2 checkMonth
+inc Month prev
+
+# Check if m < 3
+checkMonth: deb tmp decYear
+deb tmp decYear
+deb tmp decYear terms
+
+decYear: deb Year terms terms
+
+terms: deb sum y self
+# +y
+y: use "copy" From=Year To=sum tmp=tmp2
+
+# Instead of 500+ lines of manual division, use constants
+# Set up 4 and do manual division by 4
+use "copy" From=4 To=divisor
+leap: use "copy" From=Year To=tmp tmp=tmp2
+leapDiv: deb tmp centuryStart
+         deb divisor leapRestore
+         inc sum leapDiv
+leapRestore: inc divisor leapDiv
+
+# Set up 100 for century calculation  
+centuryStart: use "copy" From=100 To=divisor
+              use "copy" From=Year To=tmp tmp=tmp2
+century: deb tmp FourhundredStart
+         deb divisor centRestore
+         deb sum halt century
+centRestore: inc divisor century
+
+# Set up 400 for four hundred year correction
+FourhundredStart: use "copy" From=400 To=divisor
+                  use "copy" From=Year To=tmp tmp=tmp2
+fourhundred: deb tmp lookupStart
+             deb divisor fourRestore  
+             inc sum fourhundred
+fourRestore: inc divisor fourhundred
+
+lookupStart: deb Month halt
+deb Month day
+deb Month lookup3
+deb Month lookup2
+deb Month lookup5
+deb Month day
+deb Month lookup3
+deb Month lookup5
+deb Month lookup1
+deb Month lookup4
+deb Month lookup6
+deb Month lookup2
+deb Month lookup4
+
+lookup6: inc sum
+lookup5: inc sum
+lookup4: inc sum
+lookup3: inc sum
+lookup2: inc sum
+lookup1: inc sum
+
+day: use "copy" From=Day To=sum tmp=tmp2
+
+modout: deb sum out0
+deb sum out1
+deb sum out2
+deb sum out3
+deb sum out4
+deb sum out5
+deb sum out6 modout
+
+out6: inc Out
+out5: inc Out
+out4: inc Out
+out3: inc Out
+out2: inc Out
+out1: inc Out
+out0: end

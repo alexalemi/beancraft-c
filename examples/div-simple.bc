@@ -1,0 +1,15 @@
+# Simple division using repeated subtraction  
+# Dividend / Divisor = Quotient (remainder in Dividend)
+
+# First, save the original divisor
+save: deb Divisor loop
+      inc saved prev
+
+loop: deb Dividend done
+      deb saved restore
+      inc Quotient loop
+      
+restore: deb saved loop
+         inc saved prev
+
+done: end

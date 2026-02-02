@@ -1,0 +1,22 @@
+# Division: Dividend / Divisor = Quotient (remainder in Dividend)
+# Requires: Dividend, Divisor  
+# Outputs: Quotient, remainder left in Dividend
+
+# First copy divisor to temp for restoration
+copyDivisor: deb Divisor checkLoop
+             inc temp prev
+
+checkLoop: deb Dividend done
+           deb temp subtract
+           inc Quotient
+           # Restore temp from original divisor
+           deb Divisor restoreTemp
+           inc temp prev
+           
+restoreTemp: deb temp checkLoop
+             inc Divisor prev
+
+subtract: deb temp done
+          inc Divisor prev
+
+done: end

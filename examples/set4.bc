@@ -1,0 +1,6 @@
+# Sets register Val to 4
+inc Val
+inc Val  
+inc Val
+inc Val
+end

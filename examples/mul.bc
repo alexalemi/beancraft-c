@@ -1,0 +1,16 @@
+# Multiply A * B -> Out
+# Algorithm: Add A to Out, B times
+
+# Clear working registers first
+clrTmp: - tmp clrOut self
+clrOut: - Out loop self
+
+loop: - B done
+# Copy A to both Out and tmp
+addA: - A restoreA
++ Out
++ tmp addA
+
+# Restore A from tmp
+restoreA: - tmp loop
++ A prev

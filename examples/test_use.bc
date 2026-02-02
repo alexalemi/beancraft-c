@@ -1,0 +1,5 @@
+# Test the use statement
+# This should: clear Out, then move A to Out
+
+use "clear" Which=Out
+use "move" From=A To=Out

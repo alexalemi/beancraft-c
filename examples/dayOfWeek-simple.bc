@@ -1,0 +1,78 @@
+# Compute day of week - simplified with initial values
+
+# Clear outputs
+deb Out next self
+deb tmp next self  
+deb tmp2 next self
+
+# Copy month for processing
+copyMonth: deb Month refillMonth
+inc tmp
+inc tmp2 copyMonth
+refillMonth: deb tmp2 checkMonth
+inc Month prev
+
+# Check if month < 3 (subtract 3 from tmp)
+checkMonth: deb tmp decYear
+deb tmp decYear  
+deb tmp decYear terms
+
+# If month < 3, decrement year
+decYear: deb Year terms terms
+
+# Start building sum with year
+terms: deb sum y self
+y: use "copy" From=Year To=sum tmp=tmp2
+
+# Add year/4 (set up divisor=4 and divide)  
+leap: use "copy" From=4 To=four
+      use "copy" From=Year To=tmp tmp=tmp2
+      # Manually divide by 4 (repeated subtraction)
+      leapLoop: deb tmp leapDone
+                deb four leapRestore
+                inc sum leapLoop
+      leapRestore: inc four leapLoop
+      leapDone: continue
+
+# For now, skip the complex 100/400 year corrections and go to lookup
+continue: lookupStart
+
+lookupStart: deb Month halt
+deb Month day
+deb Month lookup3  
+deb Month lookup2
+deb Month lookup5
+deb Month day
+deb Month lookup3
+deb Month lookup5
+deb Month lookup1
+deb Month lookup4
+deb Month lookup6
+deb Month lookup2
+deb Month lookup4
+
+lookup6: inc sum
+lookup5: inc sum
+lookup4: inc sum  
+lookup3: inc sum
+lookup2: inc sum
+lookup1: inc sum
+
+day: use "copy" From=Day To=sum tmp=tmp2
+
+# Modulo 7
+modout: deb sum out0
+deb sum out1
+deb sum out2
+deb sum out3  
+deb sum out4
+deb sum out5
+deb sum out6 modout
+
+out6: inc Out
+out5: inc Out
+out4: inc Out
+out3: inc Out
+out2: inc Out  
+out1: inc Out
+out0: end

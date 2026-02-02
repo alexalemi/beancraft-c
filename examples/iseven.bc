@@ -1,0 +1,16 @@
+# Check if N is even -> Even (1 if even, 0 if odd)
+
+# Clear Even register and set to 1 (start assuming even)
+clr: - Even init self
+init: + Even loop
+
+# Toggle state with each decrement of N
+loop: - N result
+# Was marked even, now mark odd
+- Even oddPhase
++ Even loop
+
+oddPhase: - N result
++ Even loop
+
+result:

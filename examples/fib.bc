@@ -1,0 +1,43 @@
+# Compute Nth Fibonacci number -> Out
+# fib(0)=0, fib(1)=1, fib(N)=fib(N-1)+fib(N-2)
+
+# Clear registers
+clr1: - tmp clr2 self
+clr2: - curr clr3 self
+clr3: - pv clrOut self
+clrOut: - Out start self
+
+# Handle N=0: return 0
+start: - N oneCase
++ Out done
+
+# Handle N=1: return 1
+oneCase: - N setup
++ Out done
+
+# Initialize: pv=0, curr=1
+setup: + curr loop
+
+# Each iteration: Out = curr + pv, then shift
+loop: - N result
+
+# Copy curr to tmp and Out
+copyCurr: - curr addPv
++ tmp
++ Out copyCurr
+
+# Add pv to Out (Out = curr + pv = fib(n))
+addPv: - pv moveTmp
++ Out prev
+
+# Move tmp to pv
+moveTmp: - tmp moveOut
++ pv prev
+
+# Move Out to curr
+moveOut: - Out loop
++ curr prev
+
+# Copy curr to Out as result
+result: - curr done
++ Out prev

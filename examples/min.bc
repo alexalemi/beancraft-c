@@ -1,0 +1,25 @@
+# Find minimum of A and B -> Out
+
+# Clear working registers
+clr1: - tmp clrOut self
+clrOut: - Out loop self
+
+# Decrement both until one hits zero
+loop: - A aWins
+- B bWins
++ tmp loop
+
+# A hit zero first - A was smaller or equal
+# Out = number of decrements = min
+aWins: - tmp plusB
++ Out prev
+
+plusB: - B done
++ Out prev
+
+# B hit zero first - B was smaller
+# Restore the one we took from A, then Out = tmp
+bWins: + A copyTmp
+
+copyTmp: - tmp done
++ Out prev

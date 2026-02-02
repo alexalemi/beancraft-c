@@ -1,0 +1,23 @@
+# Subtract B from A -> Out
+# If B > A, Out will be 0 (saturating subtraction)
+
+# Clear working registers
+clrTmp: - tmp clrOut self
+clrOut: - Out copyA self
+
+# Copy A to Out and tmp
+copyA: - A subLoop
++ Out
++ tmp copyA
+
+# Subtract: for each B, decrement Out
+subLoop: - B restore
+- Out underflow
++ tmp subLoop
+
+# Out hit zero before B exhausted - saturating at 0
+underflow: + Out restore
+
+# Restore B from tmp
+restore: - tmp done
++ B prev
