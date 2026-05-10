@@ -292,6 +292,33 @@ bool bignum_add_into(Bignum *dst, Bignum src) {
     return true;
 }
 
+uint64_t bignum_divmod_small(Bignum *x, uint64_t k) {
+    // k > 0 is a precondition.
+    if (bignum_is_immediate(*x)) {
+        uint64_t v = bignum_get_immediate(*x);
+        *x = bignum_make_immediate(v / k);   // quotient <= v <= MAX_IMMEDIATE
+        return v % k;
+    }
+
+    BigLimbs *limbs = bignum_get_ptr(*x);
+    uint64_t rem = 0;
+    for (int i = (int)limbs->len - 1; i >= 0; i--) {
+        // rem < k, so cur = rem*2^64 + limb < k*2^64, hence cur/k < 2^64.
+        __uint128_t cur = ((__uint128_t)rem << 64) | limbs->limbs[i];
+        limbs->limbs[i] = (uint64_t)(cur / k);
+        rem = (uint64_t)(cur % k);
+    }
+
+    // Normalize and demote to immediate if it now fits.
+    while (limbs->len > 1 && limbs->limbs[limbs->len - 1] == 0) limbs->len--;
+    if (limbs->len == 1 && limbs->limbs[0] <= BIGNUM_MAX_IMMEDIATE) {
+        uint64_t v = limbs->limbs[0];
+        free(limbs);
+        *x = bignum_make_immediate(v);
+    }
+    return rem;
+}
+
 // ============================================================
 // Comparison
 // ============================================================

@@ -12,9 +12,9 @@ typedef enum {
     OPT_FULL = 3,      // All optimizations
 } OptLevel;
 
-// Maximum fan-out of a single transfer (deb A; inc D1; inc D2; ...; jmp deb).
-// Longer chains are simply left unoptimized.
-#define IR_OPT_MAX_DESTS 8
+// Cap on the fan-out of a TRANSFER (deb A; inc D1..Dn; jmp deb) and on the
+// divisor of a DIVMOD (k contiguous `deb R`). Larger ones are left unoptimized.
+#define IR_OPT_MAX_DESTS 32
 
 // Extended IR opcodes for optimized operations.
 // INC/DEB/END mirror the plain IR; the rest are O(1) folds of loops.
@@ -25,17 +25,25 @@ typedef enum {
 
     IR_OPT_ZERO,          // reg[REG] = 0; goto arg_a
     IR_OPT_TRANSFER,      // for d in dests: reg[d] += reg[REG];  reg[REG] = 0;  goto arg_a
+    IR_OPT_DIVMOD,        // r = reg[REG] mod K;  for d in dests: reg[d] += reg[REG] / K;
+                          //   reg[REG] = 0;  goto exits[r]    (K = arg_b)
     IR_OPT_COPY,          // reserved (non-destructive copy); not emitted yet
 } IrOptOp;
 
 // Extended instruction for optimized IR.
+//
+// The `dests` array of IrOptProgram is a packed pool. A TRANSFER owns the slice
+// dests[dest_off .. dest_off+dest_count) holding its destination register
+// indices. A DIVMOD owns dests[dest_off .. dest_off+dest_count) for its quotient
+// destination registers, immediately followed by dests[.. + arg_b) holding its
+// arg_b exit instruction indices (one per remainder 0..arg_b-1).
 typedef struct {
     IrOptOp op;
-    uint32_t reg;         // primary register (src for TRANSFER, target otherwise)
-    uint32_t dest_off;    // TRANSFER: start offset into IrOptProgram.dests
-    uint32_t dest_count;  // TRANSFER: number of destination registers
+    uint32_t reg;         // primary register (src for TRANSFER/DIVMOD, target otherwise)
+    uint32_t dest_off;    // TRANSFER/DIVMOD: start offset into IrOptProgram.dests
+    uint32_t dest_count;  // TRANSFER/DIVMOD: number of destination registers
     uint32_t arg_a;       // jump target / zero branch
-    uint32_t arg_b;       // non-zero branch (for DEB)
+    uint32_t arg_b;       // DEB: non-zero branch.  DIVMOD: the divisor K.
 } IrOptInst;
 
 // Optimized program
@@ -47,7 +55,8 @@ typedef struct {
     uint32_t inst_count;
     uint32_t inst_capacity;
 
-    // Packed destination-register lists for TRANSFER instructions.
+    // Packed operand pool: TRANSFER destination registers, DIVMOD quotient
+    // registers, and DIVMOD exit-instruction indices (see IrOptInst).
     uint32_t *dests;
     uint32_t dest_total;
 
@@ -64,8 +73,10 @@ typedef struct {
 // Pattern types detected during analysis
 typedef enum {
     PATTERN_NONE = 0,
-    PATTERN_ZERO,         // deb R exit self           -> reg[R] = 0; goto exit
-    PATTERN_TRANSFER,     // deb A exit; inc D1..Dn; jmp deb -> Di += A; A = 0; goto exit
+    PATTERN_ZERO,         // deb R exit self                       -> reg[R] = 0; goto exit
+    PATTERN_TRANSFER,     // deb A exit; inc D1..Dn; jmp deb        -> Di += A; A = 0; goto exit
+    PATTERN_DIVMOD,       // deb R e0; .. deb R e(k-1); inc Q1..Qm; jmp deb
+                          //   -> Qi += R/k;  goto e_(R mod k);  R = 0    (k >= 2)
 } PatternType;
 
 // Detected pattern info
@@ -73,10 +84,12 @@ typedef struct {
     PatternType type;
     uint32_t start_inst;  // first instruction of the pattern
     uint32_t end_inst;    // one past the last instruction of the pattern
-    uint32_t src_reg;     // source / cleared register
-    uint32_t exit_inst;   // where to continue after the pattern completes
-    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER: the increment targets, in order
+    uint32_t src_reg;     // source / cleared / dividend register
+    uint32_t exit_inst;   // TRANSFER/ZERO: where to continue afterwards
+    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: increment / quotient targets
     uint32_t dst_count;
+    uint32_t div_k;                       // DIVMOD: the divisor
+    uint32_t exit_insts[IR_OPT_MAX_DESTS];// DIVMOD: continuation per remainder 0..div_k-1
 } Pattern;
 
 // Optimize an IR program. Returns a new optimized program; the original is

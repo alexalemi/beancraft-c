@@ -103,6 +103,18 @@ void interp_step(InterpState *state) {
         break;
     }
 
+    case IR_OPT_DIVMOD: {
+        uint32_t k = inst->arg_b;
+        uint64_t r = bignum_divmod_small(&state->regs[inst->reg], k);
+        Bignum q = state->regs[inst->reg];   // now the quotient; no dest aliases it
+        for (uint32_t i = 0; i < inst->dest_count; i++) {
+            bignum_add_into(&state->regs[prog->dests[inst->dest_off + i]], q);
+        }
+        bignum_set_zero(&state->regs[inst->reg]);
+        state->pc = prog->dests[inst->dest_off + inst->dest_count + r];
+        break;
+    }
+
     case IR_OPT_COPY:
     default:
         // Not emitted by the current optimizer; fall through harmlessly.

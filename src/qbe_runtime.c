@@ -29,6 +29,13 @@ void bc_add_into(Bignum *dst, Bignum src) {
     bignum_add_into(dst, src);
 }
 
+// reg := floor(reg / k); returns reg mod k. (k >= 2; a DIVMOD calls this, then
+// fans the quotient out over its destinations, zeroes reg, and branches on the
+// remainder.)
+uint64_t bc_divmod(Bignum *reg, uint64_t k) {
+    return bignum_divmod_small(reg, k);
+}
+
 // --- helpers invoked from generated code and the driver -------------------
 
 // Numeric view of a register: the exact value if it fits in 64 bits, otherwise

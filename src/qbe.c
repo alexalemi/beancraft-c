@@ -270,6 +270,33 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
             buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
             break;
 
+        case IR_OPT_DIVMOD: {
+            uint32_t k = inst->arg_b;
+            const uint32_t *exits = &prog->dests[inst->dest_off + inst->dest_count];
+            if (opts.emit_debug_info)
+                buf_printf(&buf, "    # DIVMOD %s / %u\n", prog->reg_names[inst->reg]->data, k);
+            emit_reg_ptr(&buf, "src", inst->reg);
+            buf_printf(&buf, "    %%rem =l call $bc_divmod(l %%src, l %u)\n", k);
+            if (inst->dest_count > 0) {
+                buf_puts(&buf, "    %qval =l loadl %src\n");   // the quotient
+                for (uint32_t d = 0; d < inst->dest_count; d++) {
+                    buf_printf(&buf, "    %%dst%u =l add $bc_regs, %u\n",
+                               d, prog->dests[inst->dest_off + d] * 8);
+                    buf_printf(&buf, "    call $bc_add_into(l %%dst%u, l %%qval)\n", d);
+                }
+            }
+            buf_puts(&buf, "    call $bc_zero(l %src)\n");
+            // Branch on the remainder (0..k-1) through a comparison cascade.
+            for (uint32_t e = 0; e + 1 < k; e++) {
+                buf_printf(&buf, "    %%dmcmp%u =w ceql %%rem, %u\n", e, e);
+                buf_printf(&buf, "    jnz %%dmcmp%u, @inst_%u, @inst_%u_dm%u\n",
+                           e, exits[e], i, e + 1);
+                buf_printf(&buf, "@inst_%u_dm%u\n", i, e + 1);
+            }
+            buf_printf(&buf, "    jmp @inst_%u\n\n", exits[k - 1]);
+            break;
+        }
+
         case IR_OPT_COPY:
             // The optimizer never emits COPY; if it ever does, fall through
             // harmlessly rather than miscompile.

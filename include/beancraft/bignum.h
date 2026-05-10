@@ -109,6 +109,10 @@ Bignum bignum_add(Bignum a, Bignum b);
 // Add in place: dst += src
 bool bignum_add_into(Bignum *dst, Bignum src);
 
+// Divide x by k (k must be > 0) in place; x becomes floor(x / k).
+// Returns the remainder (always < k, hence fits in u64).
+uint64_t bignum_divmod_small(Bignum *x, uint64_t k);
+
 // Set to zero (frees heap if necessary)
 void bignum_set_zero(Bignum *x);
 
