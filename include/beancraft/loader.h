@@ -25,11 +25,19 @@ typedef struct {
     uint32_t bucket_count;
 } ModuleCache;
 
+// Registered `func` definition (a linked-list entry).
+typedef struct FuncEntry {
+    Str *name;
+    const AstNode *def;        // the AST_FUNCDEF node
+    struct FuncEntry *next;
+} FuncEntry;
+
 // Loader context
 typedef struct {
     Arena *arena;
     StrPool *strings;
     ModuleCache *cache;
+    FuncEntry *funcs;           // registered `func` definitions
     const char *base_path;      // Base directory for relative imports
     uint32_t use_counter;       // Counter for generating unique scope prefixes
     uint32_t depth;             // Current recursion depth

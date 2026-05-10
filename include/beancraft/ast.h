@@ -12,6 +12,8 @@ typedef enum {
     AST_DEB,
     AST_END,
     AST_USE,
+    AST_FUNCDEF,   // `func NAME PARAM... { body }` -- a declaration, removed by the loader
+    AST_CALL,      // `NAME ARG...` -- expanded inline by the loader
 } AstKind;
 
 // Jump target (before label resolution)
@@ -85,6 +87,21 @@ typedef struct AstNode {
             LabelMapping *label_mappings;
             uint32_t label_mapping_count;
         } use;
+
+        struct {          // FUNCDEF
+            Str *name;
+            Str **params;        // parameter names
+            bool *param_is_label;// per parameter: true if it is a label parameter (~name)
+            uint32_t param_count;
+            struct AstNode *body;
+            uint32_t body_count;
+        } funcdef;
+
+        struct {          // CALL
+            Str *name;
+            Str **args;          // positional argument names (registers and/or labels)
+            uint32_t arg_count;
+        } call;
     };
 } AstNode;
 

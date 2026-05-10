@@ -17,11 +17,14 @@ typedef enum {
     TOK_DEB,          // 'deb' or '-'
     TOK_END,          // 'end' or '.'
     TOK_USE,          // 'use' or '%'
+    TOK_FUNC,         // 'func'
 
     // Punctuation
     TOK_COLON,        // ':'
     TOK_EQUALS,       // '='
     TOK_TILDE,        // '~'
+    TOK_LBRACE,       // '{'
+    TOK_RBRACE,       // '}'
 
     // Literals
     TOK_IDENT,        // Register name, label, keyword

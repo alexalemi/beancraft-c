@@ -96,6 +96,22 @@ void ast_print(const Ast *ast) {
                 printf(" %s~%s", lm->local->data, lm->import->data);
             }
             break;
+
+        case AST_FUNCDEF:
+            printf("func %s", node->funcdef.name->data);
+            for (uint32_t j = 0; j < node->funcdef.param_count; j++) {
+                printf(" %s%s", node->funcdef.param_is_label[j] ? "~" : "",
+                       node->funcdef.params[j]->data);
+            }
+            printf(" { %u statements }", node->funcdef.body_count);
+            break;
+
+        case AST_CALL:
+            printf("call %s", node->call.name->data);
+            for (uint32_t j = 0; j < node->call.arg_count; j++) {
+                printf(" %s", node->call.args[j]->data);
+            }
+            break;
         }
 
         printf(" (line %u)\n", node->line);

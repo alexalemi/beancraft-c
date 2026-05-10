@@ -108,6 +108,7 @@ static TokenKind check_keyword(const char *start, size_t len) {
         if (memcmp(start, "init", 4) == 0) return TOK_INIT;
         if (memcmp(start, "done", 4) == 0) return TOK_DONE;
         if (memcmp(start, "halt", 4) == 0) return TOK_HALT;
+        if (memcmp(start, "func", 4) == 0) return TOK_FUNC;
     }
 
     return TOK_IDENT;
@@ -235,6 +236,12 @@ Token lexer_next(Lexer *lex) {
     case '%':
         advance(lex);
         return make_token(TOK_USE, start_line, start_col);
+    case '{':
+        advance(lex);
+        return make_token(TOK_LBRACE, start_line, start_col);
+    case '}':
+        advance(lex);
+        return make_token(TOK_RBRACE, start_line, start_col);
     case '"':
         return scan_string(lex);
     }
@@ -293,9 +300,12 @@ const char *token_kind_name(TokenKind kind) {
     case TOK_DEB:     return "deb";
     case TOK_END:     return "end";
     case TOK_USE:     return "use";
+    case TOK_FUNC:    return "func";
     case TOK_COLON:   return ":";
     case TOK_EQUALS:  return "=";
     case TOK_TILDE:   return "~";
+    case TOK_LBRACE:  return "{";
+    case TOK_RBRACE:  return "}";
     case TOK_IDENT:   return "identifier";
     case TOK_NUMBER:  return "number";
     case TOK_STRING:  return "string";

@@ -17,7 +17,8 @@ typedef struct {
 } Parser;
 
 // Forward declarations
-static bool parse_line(Parser *p);
+static bool parse_one(Parser *p, AstNode *node);
+static bool parse_funcdef(Parser *p);
 
 static void advance(Parser *p) {
     p->previous = p->current;
@@ -232,72 +233,152 @@ static bool parse_use(Parser *p, AstNode *node) {
     return true;
 }
 
-static bool parse_instruction(Parser *p, AstNode *node) {
+// A function call statement: `name arg arg ...`. The call name has already been
+// consumed; `p->current` is positioned at the first argument (or end of line).
+static bool parse_call(Parser *p, AstNode *node, Str *name, uint32_t line, uint32_t col) {
+    node->kind = AST_CALL;
+    node->line = line;
+    node->column = col;
+    node->call.name = name;
+
+    Str *args[64];
+    uint32_t n = 0;
+    while (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
+        if (n >= 64) { error(p, "too many call arguments"); return false; }
+        args[n++] = p->current.str;
+        advance(p);
+    }
+    if (n > 0) {
+        node->call.args = arena_alloc(p->arena, n * sizeof(Str *));
+        memcpy(node->call.args, args, n * sizeof(Str *));
+    } else {
+        node->call.args = NULL;
+    }
+    node->call.arg_count = n;
+    return true;
+}
+
+// A statement body: an instruction (inc/deb/end/use) or a function call.
+static bool parse_statement(Parser *p, AstNode *node) {
     switch (p->current.kind) {
-    case TOK_INC:
-        advance(p);
-        return parse_inc(p, node);
-    case TOK_DEB:
-        advance(p);
-        return parse_deb(p, node);
-    case TOK_END:
-        advance(p);
-        return parse_end(p, node);
-    case TOK_USE:
-        advance(p);
-        return parse_use(p, node);
+    case TOK_INC: advance(p); return parse_inc(p, node);
+    case TOK_DEB: advance(p); return parse_deb(p, node);
+    case TOK_END: advance(p); return parse_end(p, node);
+    case TOK_USE: advance(p); return parse_use(p, node);
     default:
-        error(p, "expected instruction");
+        if (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
+            Token name = p->current;
+            advance(p);
+            return parse_call(p, node, name.str, name.line, name.column);
+        }
+        error(p, "expected an instruction or a function call");
         return false;
     }
 }
 
-static bool parse_line(Parser *p) {
-    // Skip empty lines
-    while (match(p, TOK_NEWLINE)) {}
-
-    if (check(p, TOK_EOF)) {
-        return true;  // Done
-    }
-
-    AstNode *node = ast_add_node(p->ast);
-
-    // Optional leading label: an identifier (or a keyword used as a name)
-    // followed by ':'. A line that begins with an identifier can only be a
-    // label, since every instruction starts with inc/deb/end/use (or +/-/./%%).
+// One statement, with an optional leading `label:`. A line that begins with an
+// identifier not followed by ':' is a function call.
+static bool parse_one(Parser *p, AstNode *node) {
     if (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
         Token saved = p->current;
         advance(p);
         if (!check(p, TOK_COLON)) {
-            p->ast->node_count--;  // Drop the node we optimistically added
-            error(p, "expected ':' after label");
-            return false;
+            return parse_call(p, node, saved.str, saved.line, saved.column);
         }
         node->label = saved.str;
         node->line = saved.line;
         node->column = saved.column;
-        advance(p);  // Skip ':'
+        advance(p);  // ':'
 
-        // A bare label at the end of a line marks the implicit halt. This lets
-        // programs name the program's exit point, e.g. `loop: - N done` paired
-        // with a trailing `done:`.
-        if (check(p, TOK_NEWLINE) || check(p, TOK_EOF)) {
+        // A bare label at end of line/file (or before '}') marks the implicit
+        // halt -- lets a program name its exit point (e.g. a trailing `done:`).
+        if (check(p, TOK_NEWLINE) || check(p, TOK_EOF) || check(p, TOK_RBRACE)) {
             node->kind = AST_END;
             return true;
         }
     }
+    return parse_statement(p, node);
+}
 
-    // Parse instruction
-    if (!parse_instruction(p, node)) {
-        return false;
+// `func NAME [~]PARAM... { statement* }`. A '~' prefix marks a label parameter
+// (bound to a label argument at the call site); otherwise it is a register
+// parameter. The body is parsed into a side AST and the call sites are expanded
+// inline later by the loader.
+static bool parse_funcdef(Parser *p) {
+    uint32_t fline = p->current.line, fcol = p->current.column;
+    advance(p);  // consume 'func'
+
+    if (!check(p, TOK_IDENT)) { error(p, "expected function name after 'func'"); return false; }
+    Str *fname = p->current.str;
+    advance(p);
+
+    Str *params[16];
+    bool param_is_label[16];
+    uint32_t pn = 0;
+    while (!check(p, TOK_LBRACE)) {
+        bool is_label = match(p, TOK_TILDE);
+        if (!check(p, TOK_IDENT) && !token_is_keyword(p->current.kind)) {
+            error(p, "expected parameter name in 'func' declaration");
+            return false;
+        }
+        if (pn >= 16) { error(p, "too many function parameters"); return false; }
+        params[pn] = p->current.str;
+        param_is_label[pn] = is_label;
+        pn++;
+        advance(p);
     }
+    advance(p);  // consume '{'
 
-    // Expect newline or EOF
+    Ast *body = ast_new(p->arena, p->strings);
+    Ast *saved_ast = p->ast;
+    p->ast = body;
+    for (;;) {
+        while (match(p, TOK_NEWLINE)) {}
+        if (check(p, TOK_RBRACE) || check(p, TOK_EOF) || p->had_error) break;
+        AstNode *bn = ast_add_node(p->ast);
+        if (!parse_one(p, bn)) break;
+        if (!check(p, TOK_NEWLINE) && !check(p, TOK_RBRACE) && !check(p, TOK_EOF)) {
+            error(p, "expected newline after statement in function body");
+            break;
+        }
+    }
+    p->ast = saved_ast;
+    if (p->had_error) return false;
+    if (!consume(p, TOK_RBRACE, "expected '}' to close function body")) return false;
+
+    AstNode *node = ast_add_node(p->ast);
+    node->kind = AST_FUNCDEF;
+    node->label = NULL;
+    node->line = fline;
+    node->column = fcol;
+    node->funcdef.name = fname;
+    node->funcdef.param_count = pn;
+    if (pn > 0) {
+        node->funcdef.params = arena_alloc(p->arena, pn * sizeof(Str *));
+        memcpy(node->funcdef.params, params, pn * sizeof(Str *));
+        node->funcdef.param_is_label = arena_alloc(p->arena, pn * sizeof(bool));
+        memcpy(node->funcdef.param_is_label, param_is_label, pn * sizeof(bool));
+    } else {
+        node->funcdef.params = NULL;
+        node->funcdef.param_is_label = NULL;
+    }
+    node->funcdef.body = body->nodes;
+    node->funcdef.body_count = body->node_count;
+    return true;
+}
+
+static bool parse_line(Parser *p) {
+    while (match(p, TOK_NEWLINE)) {}
+    if (check(p, TOK_EOF)) return true;
+    if (check(p, TOK_FUNC)) return parse_funcdef(p);
+
+    AstNode *node = ast_add_node(p->ast);
+    if (!parse_one(p, node)) return false;
+
     if (!check(p, TOK_NEWLINE) && !check(p, TOK_EOF)) {
-        error(p, "expected newline after instruction");
+        error(p, "expected newline after statement");
         return false;
     }
-
     return true;
 }
 

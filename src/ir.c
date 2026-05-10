@@ -231,10 +231,14 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
             break;
 
         case AST_USE:
-            // Use statements should have been expanded by the loader
-            // If we get here, something went wrong
+        case AST_FUNCDEF:
+        case AST_CALL:
+            // These are removed/expanded by the loader; reaching IR means a bug.
             return bc_err(arena, BC_ERR_SEMANTIC, NULL, node->line, 0,
-                         "internal error: use statement not expanded by loader");
+                         "internal error: %s not expanded by loader",
+                         node->kind == AST_USE ? "use statement"
+                       : node->kind == AST_CALL ? "function call"
+                       : "function definition");
         }
     }
 
