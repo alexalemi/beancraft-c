@@ -34,20 +34,20 @@ y: use "copy" From=Year To=sum tmp=tmp2
 leapStart: deb tmp next self
 deb tmp2 next self
 use "copy" From=Year To=tmp tmp=tmp2
-use "div" Dividend=tmp Divisor=4
+use "div" Dividend=tmp Divisor=4 Quotient=Quotient
 use "copy" From=Quotient To=sum tmp=tmp2
 
 # century: -y/100  
 centuryStart: deb tmp next self
 use "copy" From=Year To=tmp tmp=tmp2
-use "div" Dividend=tmp Divisor=100
+use "div" Dividend=tmp Divisor=100 Quotient=Quotient
 centuryLoop: deb Quotient FourhundredStart
 deb sum halt centuryLoop
 
 # Four hundred year correction: +y/400
 FourhundredStart: deb tmp next self
 use "copy" From=Year To=tmp tmp=tmp2
-use "div" Dividend=tmp Divisor=400
+use "div" Dividend=tmp Divisor=400 Quotient=Quotient
 use "copy" From=Quotient To=sum tmp=tmp2
 
 lookupStart: deb Month halt

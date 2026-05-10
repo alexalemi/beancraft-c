@@ -280,28 +280,15 @@ TEST(cmp_greater) {
 }
 
 // ============================================================
-// QBE runtime tests
+// Transfer semantics (dst += src; src = 0) -- as used by the QBE backend
 // ============================================================
 
-TEST(qbe_inc_dec) {
-    Bignum reg = bignum_zero();
-
-    assert(qbe_bignum_is_zero(reg) == 1);
-
-    qbe_bignum_inc(&reg);
-    assert(qbe_bignum_is_zero(reg) == 0);
-
-    assert(qbe_bignum_dec(&reg) == 1);
-    assert(qbe_bignum_is_zero(reg) == 1);
-
-    assert(qbe_bignum_dec(&reg) == 0);  // Can't dec zero
-}
-
-TEST(qbe_transfer) {
+TEST(transfer) {
     Bignum src = bignum_from_u64(100);
     Bignum dst = bignum_from_u64(50);
 
-    qbe_bignum_transfer(&dst, &src);
+    bignum_add_into(&dst, src);
+    bignum_set_zero(&src);
 
     uint64_t dst_val, src_val;
     assert(bignum_to_u64(dst, &dst_val));
@@ -309,6 +296,7 @@ TEST(qbe_transfer) {
 
     assert(dst_val == 150);
     assert(src_val == 0);
+    assert(bignum_is_zero(src));
 }
 
 // ============================================================
@@ -348,8 +336,7 @@ int main(void) {
     RUN(cmp_less);
     RUN(cmp_greater);
 
-    RUN(qbe_inc_dec);
-    RUN(qbe_transfer);
+    RUN(transfer);
 
     printf("\nAll bignum tests passed!\n");
     return 0;

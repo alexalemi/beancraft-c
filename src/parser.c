@@ -34,14 +34,10 @@ static bool match(Parser *p, TokenKind kind) {
     return true;
 }
 
-static void error_at(Parser *p, Token *tok, const char *message) {
+static void error(Parser *p, const char *message) {
     if (p->had_error) return;  // Suppress cascading errors
     p->had_error = true;
     snprintf(p->error_msg, sizeof(p->error_msg), "%s", message);
-}
-
-static void error(Parser *p, const char *message) {
-    error_at(p, &p->current, message);
 }
 
 static bool consume(Parser *p, TokenKind kind, const char *message) {
@@ -266,30 +262,28 @@ static bool parse_line(Parser *p) {
 
     AstNode *node = ast_add_node(p->ast);
 
-    // Check for optional label
-    if ((check(p, TOK_IDENT) || token_is_keyword(p->current.kind))) {
-        // Peek ahead to see if this is a label (followed by ':')
+    // Optional leading label: an identifier (or a keyword used as a name)
+    // followed by ':'. A line that begins with an identifier can only be a
+    // label, since every instruction starts with inc/deb/end/use (or +/-/./%%).
+    if (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
         Token saved = p->current;
         advance(p);
-        if (check(p, TOK_COLON)) {
-            // It's a label
-            node->label = saved.str;
-            advance(p);  // Skip ':'
-        } else {
-            // Not a label, this must be an instruction or we have an error
-            // Put back the token (we can't really put back, so handle inline)
-            // Actually we already advanced, so just check if it's an instruction
-            // The saved token should have been an instruction keyword
-
-            // Reset - but we can't easily. Instead, re-check what we have
-            // If the previous token was an instruction, we're in trouble
-            // Let's handle this differently...
-            p->ast->node_count--;  // Remove the node we added
-
-            // Go back to saved state by re-parsing
-            // This is a bit hacky but works
-            error(p, "expected ':' after label or valid instruction");
+        if (!check(p, TOK_COLON)) {
+            p->ast->node_count--;  // Drop the node we optimistically added
+            error(p, "expected ':' after label");
             return false;
+        }
+        node->label = saved.str;
+        node->line = saved.line;
+        node->column = saved.column;
+        advance(p);  // Skip ':'
+
+        // A bare label at the end of a line marks the implicit halt. This lets
+        // programs name the program's exit point, e.g. `loop: - N done` paired
+        // with a trailing `done:`.
+        if (check(p, TOK_NEWLINE) || check(p, TOK_EOF)) {
+            node->kind = AST_END;
+            return true;
         }
     }
 

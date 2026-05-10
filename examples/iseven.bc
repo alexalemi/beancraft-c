@@ -1,16 +1,11 @@
-# Check if N is even -> Even (1 if even, 0 if odd)
+# Check whether N is even -> Even (1 if even, 0 if odd)
+# Even starts at 1 and is flipped once per decrement of N: a single deb turns 1
+# into 0, and a deb-then-inc turns 0 back into 1.
 
-# Clear Even register and set to 1 (start assuming even)
-clr: - Even init self
-init: + Even loop
+clr: - Even setOne self
+setOne: + Even loop
 
-# Toggle state with each decrement of N
 loop: - N result
-# Was marked even, now mark odd
-- Even oddPhase
-+ Even loop
-
-oddPhase: - N result
-+ Even loop
+- Even setOne loop
 
 result:

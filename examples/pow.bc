@@ -1,38 +1,34 @@
-# Compute Base^Exp -> Out
-# Algorithm: Repeated multiplication
-# Note: 0^0 = 1
+# Base^Exp -> Out  (0^0 = 1).  Out := 1; repeat Exp times: Out := Out * Base.
+# Multiplication is repeated addition.  Scratch: prod, k, save.
+# Exp is consumed; Base is preserved.
 
-# Clear working registers
-clr1: - tmp clr2 self
-clr2: - tmp2 clr3 self
-clr3: - t3 clrOut self
-clrOut: - Out setOne self
+clr1: - prod clr2 self
+clr2: - k clr3 self
+clr3: - save clr4 self
+clr4: - Out setOne self
+setOne: + Out mainLoop
 
-# Initialize Out to 1
-setOne: + Out start
+# while Exp > 0:
+mainLoop: - Exp result
 
-# Each iteration: Out = Out * Base
-start: - Exp done
+# k := Base  (copy, restoring Base via save)
+copyBase: - Base restoreBase
++ k
++ save copyBase
+restoreBase: - save addLoop
++ Base restoreBase
 
-# Multiply Out by Base: add Out to t3, Base times
-# First copy Base to tmp
-copyBase: - Base mulLoop
-+ tmp prev
-
-# For each count in tmp, add Out to t3
-mulLoop: - tmp copyResult
-# Add Out to t3, restore Out via tmp2
+# prod := Out * k   (k copies of Out summed; Out restored via save each pass)
+addLoop: - k clrOld
 addOut: - Out contAdd
-+ t3
-+ tmp2 addOut
-
-contAdd: - tmp2 mulLoop
++ prod
++ save addOut
+contAdd: - save addLoop
 + Out prev
 
-# Move t3 to Out
-copyResult: - t3 restoreBase
+# Out := prod   (clear the old Out first, then drain prod into it)
+clrOld: - Out moveProd self
+moveProd: - prod mainLoop
 + Out prev
 
-# Restore Base from tmp
-restoreBase: - tmp start
-+ Base prev
+result:

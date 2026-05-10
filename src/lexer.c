@@ -74,7 +74,7 @@ static bool is_ident_char(char c) {
     return isalnum((unsigned char)c) || c == '_' || c == '-';
 }
 
-static Token make_token(Lexer *lex, TokenKind kind, uint32_t start_line, uint32_t start_col) {
+static Token make_token(TokenKind kind, uint32_t start_line, uint32_t start_col) {
     return (Token){
         .kind = kind,
         .line = start_line,
@@ -82,7 +82,7 @@ static Token make_token(Lexer *lex, TokenKind kind, uint32_t start_line, uint32_
     };
 }
 
-static Token make_error(Lexer *lex, const char *msg, uint32_t line, uint32_t col) {
+static Token make_error(const char *msg, uint32_t line, uint32_t col) {
     return (Token){
         .kind = TOK_ERROR,
         .line = line,
@@ -126,7 +126,7 @@ static Token scan_identifier(Lexer *lex) {
     const char *text = lex->source + start;
 
     TokenKind kind = check_keyword(text, len);
-    Token tok = make_token(lex, kind, start_line, start_col);
+    Token tok = make_token(kind, start_line, start_col);
 
     // Always intern the string for identifiers
     tok.str = str_intern(lex->strings, text, len);
@@ -152,7 +152,7 @@ static Token scan_number(Lexer *lex) {
 
     size_t len = lex->pos - start;
     if (len == 0 || (len == 1 && (lex->source[start] == '+' || lex->source[start] == '-'))) {
-        return make_error(lex, "expected number", start_line, start_col);
+        return make_error("expected number", start_line, start_col);
     }
 
     // Parse the number
@@ -164,7 +164,7 @@ static Token scan_number(Lexer *lex) {
     }
     if (negative) value = -value;
 
-    Token tok = make_token(lex, TOK_NUMBER, start_line, start_col);
+    Token tok = make_token(TOK_NUMBER, start_line, start_col);
     tok.number = value;
     return tok;
 }
@@ -182,7 +182,7 @@ static Token scan_string(Lexer *lex) {
     }
 
     if (is_at_end(lex) || peek_char(lex) == '\n') {
-        return make_error(lex, "unterminated string", start_line, start_col);
+        return make_error("unterminated string", start_line, start_col);
     }
 
     size_t len = lex->pos - start;
@@ -190,7 +190,7 @@ static Token scan_string(Lexer *lex) {
     // Skip closing quote
     advance(lex);
 
-    Token tok = make_token(lex, TOK_STRING, start_line, start_col);
+    Token tok = make_token(TOK_STRING, start_line, start_col);
     tok.str = str_intern(lex->strings, lex->source + start, len);
     return tok;
 }
@@ -199,7 +199,7 @@ Token lexer_next(Lexer *lex) {
     skip_whitespace(lex);
 
     if (is_at_end(lex)) {
-        return make_token(lex, TOK_EOF, lex->line, lex->column);
+        return make_token(TOK_EOF, lex->line, lex->column);
     }
 
     uint32_t start_line = lex->line;
@@ -215,26 +215,26 @@ Token lexer_next(Lexer *lex) {
     // Newlines
     if (c == '\n') {
         advance(lex);
-        return make_token(lex, TOK_NEWLINE, start_line, start_col);
+        return make_token(TOK_NEWLINE, start_line, start_col);
     }
 
     // Single-character tokens
     switch (c) {
     case ':':
         advance(lex);
-        return make_token(lex, TOK_COLON, start_line, start_col);
+        return make_token(TOK_COLON, start_line, start_col);
     case '=':
         advance(lex);
-        return make_token(lex, TOK_EQUALS, start_line, start_col);
+        return make_token(TOK_EQUALS, start_line, start_col);
     case '~':
         advance(lex);
-        return make_token(lex, TOK_TILDE, start_line, start_col);
+        return make_token(TOK_TILDE, start_line, start_col);
     case '.':
         advance(lex);
-        return make_token(lex, TOK_END, start_line, start_col);
+        return make_token(TOK_END, start_line, start_col);
     case '%':
         advance(lex);
-        return make_token(lex, TOK_USE, start_line, start_col);
+        return make_token(TOK_USE, start_line, start_col);
     case '"':
         return scan_string(lex);
     }
@@ -249,7 +249,7 @@ Token lexer_next(Lexer *lex) {
         }
         // It's an instruction
         advance(lex);
-        return make_token(lex, c == '+' ? TOK_INC : TOK_DEB, start_line, start_col);
+        return make_token(c == '+' ? TOK_INC : TOK_DEB, start_line, start_col);
     }
 
     // Numbers
@@ -264,7 +264,7 @@ Token lexer_next(Lexer *lex) {
 
     // Unknown character
     advance(lex);
-    return make_error(lex, "unexpected character", start_line, start_col);
+    return make_error("unexpected character", start_line, start_col);
 }
 
 Token lexer_peek(Lexer *lex) {

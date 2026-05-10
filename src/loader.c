@@ -147,23 +147,19 @@ static Str *make_scoped_name(StrPool *strings, const char *scope, Str *name) {
     return result;
 }
 
-// Apply register mappings to a register name
+// Apply register mappings to a register name.
+//   local=import  -> the importer's register `import` (used directly, unscoped)
+//   local=value   -> a private scoped register (expand_use seeds it to `value`)
+//   (unmapped)    -> a private scoped register
 static Str *apply_reg_mapping(const AstNode *use_node, Str *reg,
                               StrPool *strings, const char *scope) {
-    // Check if reg matches any mapping
     for (uint32_t i = 0; i < use_node->use.reg_mapping_count; i++) {
         RegMapping *m = &use_node->use.reg_mappings[i];
         if (m->local == reg) {
-            if (m->is_value) {
-                // Value mapping - return the original name (will be set in init)
-                return reg;
-            } else {
-                // Register alias - return the import name (no scoping)
-                return m->import;
-            }
+            if (!m->is_value) return m->import;   // register alias: no scoping
+            break;                                // value mapping: scoped local (seeded below)
         }
     }
-    // No mapping - apply scope prefix
     return make_scoped_name(strings, scope, reg);
 }
 
@@ -181,30 +177,36 @@ static Str *apply_label_mapping(const AstNode *use_node, Str *label,
     return make_scoped_name(strings, scope, label);
 }
 
-// Transform a jump target with register/label mappings
-// return_label is the label to use for done/halt (to return from module)
+// Transform a jump target with register/label mappings.
+//   return_label - target for done/halt (returns from the module)
+//   entry_label  - target for init (the module's own first instruction)
 static Jump transform_jump(const AstNode *use_node, Jump jump,
                           StrPool *strings, const char *scope,
-                          Str *return_label) {
+                          Str *return_label, Str *entry_label) {
     if (jump.kind == JUMP_LABEL) {
         Jump result = jump;
         result.label = apply_label_mapping(use_node, jump.label, strings, scope);
         return result;
     }
-    // Transform done/halt to jump to return label
-    if (jump.kind == JUMP_KEYWORD &&
-        (jump.keyword == KW_DONE || jump.keyword == KW_HALT)) {
-        return jump_label(return_label);
+    if (jump.kind == JUMP_KEYWORD) {
+        // done/halt return from the module; init jumps to its first instruction
+        if (jump.keyword == KW_DONE || jump.keyword == KW_HALT) {
+            return jump_label(return_label);
+        }
+        if (jump.keyword == KW_INIT) {
+            return jump_label(entry_label);
+        }
     }
     return jump;
 }
 
-// Clone and transform a single AST node from a module
-// return_label is used to replace done/halt keywords
+// Clone and transform a single AST node from a module.
+//   return_label - replaces done/halt keywords (and the module's own END)
+//   entry_label  - replaces the init keyword
 static void clone_and_transform_node(Ast *dest, const AstNode *src,
                                      const AstNode *use_node,
                                      StrPool *strings, const char *scope,
-                                     Str *return_label) {
+                                     Str *return_label, Str *entry_label) {
     AstNode *node = ast_add_node(dest);
     node->kind = src->kind;
     node->line = src->line;
@@ -220,13 +222,16 @@ static void clone_and_transform_node(Ast *dest, const AstNode *src,
     switch (src->kind) {
     case AST_INC:
         node->inc.reg = apply_reg_mapping(use_node, src->inc.reg, strings, scope);
-        node->inc.next = transform_jump(use_node, src->inc.next, strings, scope, return_label);
+        node->inc.next = transform_jump(use_node, src->inc.next, strings, scope,
+                                        return_label, entry_label);
         break;
 
     case AST_DEB:
         node->deb.reg = apply_reg_mapping(use_node, src->deb.reg, strings, scope);
-        node->deb.jump = transform_jump(use_node, src->deb.jump, strings, scope, return_label);
-        node->deb.next = transform_jump(use_node, src->deb.next, strings, scope, return_label);
+        node->deb.jump = transform_jump(use_node, src->deb.jump, strings, scope,
+                                        return_label, entry_label);
+        node->deb.next = transform_jump(use_node, src->deb.next, strings, scope,
+                                        return_label, entry_label);
         break;
 
     case AST_END:
@@ -268,6 +273,20 @@ static BcResult load_module(LoaderContext *ctx, const char *path) {
     return BC_OK(ast);
 }
 
+// Append a labelled no-op (deb :nil next next) to dest. Used for the synthetic
+// entry and return points of an inlined module.
+static void add_nop_label(LoaderContext *ctx, Ast *dest, Str *label,
+                          uint32_t line) {
+    AstNode *node = ast_add_node(dest);
+    node->kind = AST_DEB;
+    node->label = label;
+    node->line = line;
+    node->column = 0;
+    node->deb.reg = str_intern_cstr(ctx->strings, ":nil");
+    node->deb.jump = jump_keyword(KW_NEXT);
+    node->deb.next = jump_keyword(KW_NEXT);
+}
+
 // Expand a single use statement into dest AST
 static BcResult expand_use(LoaderContext *ctx, Ast *dest,
                            const AstNode *use_node, uint32_t use_index) {
@@ -281,17 +300,13 @@ static BcResult expand_use(LoaderContext *ctx, Ast *dest,
     // Load and parse module
     BcResult load_result = load_module(ctx, module_path);
 
-    // Get directory of module for nested imports
+    // Directory of the module, used to resolve its own (nested) imports.
     char *module_dir = strdup(module_path);
     char *dir = dirname(module_dir);
-    const char *old_base = ctx->base_path;
-    ctx->base_path = dir;
-
     free(module_path);
 
     if (!load_result.ok) {
         free(module_dir);
-        ctx->base_path = old_base;
         return load_result;
     }
 
@@ -307,30 +322,71 @@ static BcResult expand_use(LoaderContext *ctx, Ast *dest,
                  use_node->use.filename->data, use_index);
     }
 
-    // Generate return label for this module invocation
-    char return_buf[80];
-    snprintf(return_buf, sizeof(return_buf), "%s/return", scope_buf);
-    Str *return_label = str_intern_cstr(ctx->strings, return_buf);
+    // Synthetic entry/return labels for this module invocation. If the `use`
+    // statement itself carried a label, that label *is* the module's entry
+    // point (so other code can jump to it).
+    char buf[80];
+    Str *entry_label;
+    if (use_node->label) {
+        entry_label = use_node->label;
+    } else {
+        snprintf(buf, sizeof(buf), "%s/entry", scope_buf);
+        entry_label = str_intern_cstr(ctx->strings, buf);
+    }
+    snprintf(buf, sizeof(buf), "%s/return", scope_buf);
+    Str *return_label = str_intern_cstr(ctx->strings, buf);
 
-    // Clone and transform each node from the module
-    for (uint32_t i = 0; i < module_ast->node_count; i++) {
-        clone_and_transform_node(dest, &module_ast->nodes[i], use_node,
-                                 ctx->strings, scope_buf, return_label);
+    // Entry no-op: `init` inside the module, and any external jump to the use
+    // statement's label, both resolve here -- not to the program's first
+    // instruction.
+    add_nop_label(ctx, dest, entry_label, use_node->line);
+
+    // Seed value-mapped registers (use "mod" L=N -> scoped L is set to N every
+    // time control enters the module): clear, then increment N times.
+    for (uint32_t i = 0; i < use_node->use.reg_mapping_count; i++) {
+        RegMapping *m = &use_node->use.reg_mappings[i];
+        if (!m->is_value || m->value <= 0) continue;
+        Str *r = make_scoped_name(ctx->strings, scope_buf, m->local);
+
+        AstNode *clr = ast_add_node(dest);
+        clr->kind = AST_DEB;
+        clr->line = use_node->line;
+        clr->deb.reg = r;
+        clr->deb.jump = jump_keyword(KW_NEXT);   // when already 0, fall through
+        clr->deb.next = jump_keyword(KW_SELF);   // otherwise keep decrementing
+
+        for (int64_t v = 0; v < m->value; v++) {
+            AstNode *inc = ast_add_node(dest);
+            inc->kind = AST_INC;
+            inc->line = use_node->line;
+            inc->inc.reg = r;
+            inc->inc.next = jump_none();         // implicit next
+        }
     }
 
-    // Add the return label as a no-op (deb :nil next next)
-    // This serves as the target for done/halt in the module
-    AstNode *return_node = ast_add_node(dest);
-    return_node->kind = AST_DEB;
-    return_node->label = return_label;
-    return_node->line = use_node->line;
-    return_node->column = 0;
-    return_node->deb.reg = str_intern_cstr(ctx->strings, ":nil");
-    return_node->deb.jump = jump_keyword(KW_NEXT);
-    return_node->deb.next = jump_keyword(KW_NEXT);
+    // Clone and transform each node from the module
+    uint32_t first_cloned = dest->node_count;
+    for (uint32_t i = 0; i < module_ast->node_count; i++) {
+        clone_and_transform_node(dest, &module_ast->nodes[i], use_node,
+                                 ctx->strings, scope_buf, return_label, entry_label);
+    }
+
+    // Nested `use` statements must resolve relative to *this* module's
+    // directory in the next expansion pass, so rewrite their paths to absolute.
+    for (uint32_t i = first_cloned; i < dest->node_count; i++) {
+        AstNode *n = &dest->nodes[i];
+        if (n->kind != AST_USE) continue;
+        char *resolved = loader_resolve_path(n->use.filename->data, dir);
+        if (resolved) {
+            n->use.filename = str_intern_cstr(ctx->strings, resolved);
+            free(resolved);
+        }
+    }
+
+    // Return no-op: target of done/halt (and the module's own END).
+    add_nop_label(ctx, dest, return_label, use_node->line);
 
     free(module_dir);
-    ctx->base_path = old_base;
     return BC_OK(NULL);
 }
 
@@ -343,9 +399,6 @@ BcResult loader_expand(LoaderContext *ctx, Ast *ast) {
 
     // Create a new AST for the expanded result
     Ast *expanded = ast_new(ctx->arena, ctx->strings);
-
-    // Track use counter for this expansion
-    uint32_t base_use_counter = ctx->use_counter;
 
     // Process each node
     for (uint32_t i = 0; i < ast->node_count; i++) {

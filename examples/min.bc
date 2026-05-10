@@ -1,25 +1,10 @@
-# Find minimum of A and B -> Out
+# Find the minimum of A and B -> Out
+# Decrement A and B in lockstep, counting iterations in Out. Whichever register
+# reaches zero first stops us, and Out then holds that count = min(A, B).
+# (A and B are consumed.)
 
-# Clear working registers
-clr1: - tmp clrOut self
 clrOut: - Out loop self
 
-# Decrement both until one hits zero
-loop: - A aWins
-- B bWins
-+ tmp loop
-
-# A hit zero first - A was smaller or equal
-# Out = number of decrements = min
-aWins: - tmp plusB
-+ Out prev
-
-plusB: - B done
-+ Out prev
-
-# B hit zero first - B was smaller
-# Restore the one we took from A, then Out = tmp
-bWins: + A copyTmp
-
-copyTmp: - tmp done
-+ Out prev
+loop: - A done
+- B done
++ Out loop

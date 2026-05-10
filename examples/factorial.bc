@@ -1,45 +1,40 @@
-# Compute N! -> Out
-# Approach: counter goes from N down to 1, multiply Out by counter each time
+# N! -> Out.  counter walks from N down to 1, multiplying Out each round.
+# Multiplication is repeated addition; Out is preserved with the help of `save`.
+# Scratch: counter, prod, k, save.  N is consumed.
 
-# Clear working registers
-clr1: - tmp clr2 self
-clr2: - tmp2 clr3 self
-clr3: - t3 clrOut self
-clrOut: - Out clrCtr self
-clrCtr: - counter setOne self
-
-# Initialize Out = 1
+clr1: - prod clr2 self
+clr2: - k clr3 self
+clr3: - save clr4 self
+clr4: - counter clr5 self
+clr5: - Out setOne self
 setOne: + Out copyN
 
-# Copy N to counter
+# counter := N
 copyN: - N mainLoop
-+ counter prev
++ counter copyN
 
-# Main loop: Out = Out * counter, then counter--
-mainLoop: - counter done
+# while counter > 0:  (counter is decremented here; multiplier is counter+1)
+mainLoop: - counter result
 
-# Clear t3 for this multiplication
-clrT3: - t3 mulStart self
+# k := counter + 1
+copyCnt: - counter restoreCnt
++ k
++ save copyCnt
+restoreCnt: - save bumpK
++ counter restoreCnt
+bumpK: + k addLoop
 
-# Multiply Out by counter: result in t3
-# First copy counter to tmp (loop counter for mul)
-mulStart: - counter addLoop
-+ tmp prev
-
-# For each tmp, add Out to t3
-addLoop: - tmp copyResult
-# Add Out to t3, using tmp2 to preserve Out
+# prod := Out * k   (k copies of Out summed; Out restored via save each pass)
+addLoop: - k clrOld
 addOut: - Out contAdd
-+ t3
-+ tmp2 addOut
-
-contAdd: - tmp2 addLoop
++ prod
++ save addOut
+contAdd: - save addLoop
 + Out prev
 
-# Move t3 to Out
-copyResult: - t3 restoreCtr
+# Out := prod   (clear the old Out first, then drain prod into it)
+clrOld: - Out moveProd self
+moveProd: - prod mainLoop
 + Out prev
 
-# Restore counter from tmp
-restoreCtr: - tmp mainLoop
-+ counter prev
+result:

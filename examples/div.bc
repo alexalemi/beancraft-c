@@ -1,22 +1,36 @@
-# Division: Dividend / Divisor = Quotient (remainder in Dividend)
-# Requires: Dividend, Divisor  
-# Outputs: Quotient, remainder left in Dividend
+# Integer division: Dividend / Divisor -> Quotient
+# The remainder is left in Dividend.  (If Divisor is 0 the program halts with
+# Quotient = 0 and Dividend unchanged.)
+#
+# Scratch registers: dcopy (a working copy of Divisor), dsave (used to restore
+# Divisor each round) and rem (counts how far into Dividend we got, so the
+# remainder can be put back if a subtraction can't be completed).
 
-# First copy divisor to temp for restoration
-copyDivisor: deb Divisor checkLoop
-             inc temp prev
+clrQ: - Quotient chkDiv self
 
-checkLoop: deb Dividend done
-           deb temp subtract
-           inc Quotient
-           # Restore temp from original divisor
-           deb Divisor restoreTemp
-           inc temp prev
-           
-restoreTemp: deb temp checkLoop
-             inc Divisor prev
+# bail out on a zero divisor
+chkDiv: - Divisor result
++ Divisor outer
 
-subtract: deb temp done
-          inc Divisor prev
+# --- outer iteration: refresh dcopy := Divisor, then try one more subtraction
+outer: - Divisor fillBack
++ dcopy
++ dsave outer
+fillBack: - dsave clrRem
++ Divisor fillBack
+clrRem: - rem inner self
 
-done: end
+# subtract one Divisor's worth from Dividend, counting the units in rem
+inner: - dcopy success
+- Dividend fail
++ rem inner
+
+# a full Divisor was subtracted: bump Quotient and go around again
+success: - rem incQ self
+incQ: + Quotient outer
+
+# Dividend ran out first: the true remainder is rem, so restore it into Dividend
+fail: - rem result
++ Dividend prev
+
+result:

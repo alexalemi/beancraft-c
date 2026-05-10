@@ -4,9 +4,9 @@ build/
 *.a
 *.so
 
-# Executables
-beancraft
-libbcruntime.a
+# Executables (anchored to the repo root so they don't shadow include/beancraft/)
+/beancraft
+/libbcruntime.a
 
 # Generated files
 *.ssa

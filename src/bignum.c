@@ -428,7 +428,6 @@ Bignum bignum_from_string(const char *s) {
 
     // For larger numbers, multiply-add digit by digit
     Bignum result = bignum_zero();
-    Bignum ten = bignum_from_u64(10);
 
     for (size_t i = 0; i < len; i++) {
         if (s[i] < '0' || s[i] > '9') {
@@ -453,36 +452,5 @@ Bignum bignum_from_string(const char *s) {
         bignum_free(&digit);
     }
 
-    bignum_free(&ten);
     return result;
-}
-
-// ============================================================
-// QBE runtime interface
-// ============================================================
-
-int qbe_bignum_inc(Bignum *reg) {
-    bignum_inc(reg);
-    return 1;
-}
-
-int qbe_bignum_dec(Bignum *reg) {
-    return bignum_dec(reg) ? 1 : 0;
-}
-
-int qbe_bignum_is_zero(Bignum reg) {
-    return bignum_is_zero(reg) ? 1 : 0;
-}
-
-void qbe_bignum_transfer(Bignum *dst, Bignum *src) {
-    bignum_add_into(dst, *src);
-    bignum_set_zero(src);
-}
-
-void qbe_bignum_add_into(Bignum *dst, Bignum src) {
-    bignum_add_into(dst, src);
-}
-
-void qbe_bignum_set_zero(Bignum *reg) {
-    bignum_set_zero(reg);
 }

@@ -1,31 +1,32 @@
-# Greatest Common Divisor using Euclidean subtraction
-# gcd(A, B) -> Out
+# Greatest common divisor of A and B -> Out, by Euclidean subtraction.
+# Each round, A and B are decremented in lockstep until one hits zero; the count
+# is held in cnt and used to restore the register that reached zero, leaving the
+# pair (min, max - min) -- one Euclidean step.  cnt is scratch; A and B consumed.
 
-# Clear working registers
-clr1: - tmp clrOut self
-clrOut: - Out checkB self
+mainLoop: - A bResult
++ A chkB
+chkB: - B aResult
++ B clrCnt
+clrCnt: - cnt sub self
 
-# If B=0, result is A
-checkB: - B copyA
-+ B loop
+sub: - A aHitZero
+- B bHitZero
++ cnt sub
 
-# Subtract smaller from larger until equal
-loop: - A aSmaller
-- B bSmaller
-+ tmp loop
-
-# A hit zero: A was smaller, continue with A=tmp, B=B+1
-aSmaller: + B restoreToA
-
-restoreToA: - tmp checkB
+# A reached zero (A <= B this round): gcd(A0,B0) == gcd(cnt, B). Restore A := cnt.
+aHitZero: - cnt mainLoop
 + A prev
 
-# B hit zero: B was smaller, continue with A=A+1, B=tmp
-bSmaller: + A restoreToB
-
-restoreToB: - tmp checkB
+# B reached zero (B < A this round): A was decremented one extra time, so add it
+# back; then gcd(A0,B0) == gcd(A, cnt). Restore B := cnt.
+bHitZero: + A fixB
+fixB: - cnt mainLoop
 + B prev
 
-# Copy A to Out
-copyA: - A done
+# B was zero at the top of the loop: A holds the gcd.
+aResult: - A done
++ Out prev
+
+# A was zero at the top of the loop: B holds the gcd.
+bResult: - B done
 + Out prev

@@ -169,24 +169,24 @@ int main(int argc, char *argv[]) {
         printf("\n");
     }
 
-    // Run optimizer if requested
-    IrOptProgram *opt_prog = NULL;
-    if (optimize || show_opt || emit_qbe) {
-        OptLevel level = optimize ? OPT_LOOPS : OPT_NONE;
-        opt_prog = ir_optimize(arena, prog, level);
+    // Lower to the optimized IR form. At -O0 this is a faithful 1:1 lowering;
+    // at -O it folds recognized loop idioms (ZERO, TRANSFER) into O(1) ops.
+    // The interpreter runs this form directly, so -O speeds up interpretation
+    // too, not just `--emit-qbe`.
+    OptLevel level = optimize ? OPT_LOOPS : OPT_NONE;
+    IrOptProgram *opt_prog = ir_optimize(arena, prog, level);
 
-        if (show_opt) {
-            printf("=== Optimized IR ===\n");
-            ir_opt_print(opt_prog);
-            printf("\n");
-        }
+    if (show_opt) {
+        printf("=== Optimized IR ===\n");
+        ir_opt_print(opt_prog);
+        printf("\n");
     }
 
     if (emit_qbe) {
         QbeOptions opts = qbe_default_options();
         opts.emit_debug_info = verbose;
         BcResult qbe_result;
-        if (optimize && opt_prog) {
+        if (optimize) {
             qbe_result = qbe_generate_opt(stdout, opt_prog, opts);
         } else {
             qbe_result = qbe_generate(stdout, prog, opts);
@@ -221,7 +221,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Create interpreter state
-    InterpState *state = interp_new(arena, prog);
+    InterpState *state = interp_new(arena, opt_prog);
     interp_init_regs(state);
 
     // Process register assignments from command line
