@@ -18,6 +18,8 @@ typedef struct {
     uint32_t pc;               // Program counter
     uint64_t steps;            // Step count
     bool halted;               // Whether program has halted
+    const bool *inc_mask;      // inc_mask[r] => `inc r` is a device trigger (NULL if no devices)
+    const bool *deb_mask;      // deb_mask[r] => `deb r` is a device poll
 } InterpState;
 
 // Create interpreter state from an optimized IR program

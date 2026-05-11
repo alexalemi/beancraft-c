@@ -71,7 +71,8 @@ static bool is_ident_start(char c) {
 }
 
 static bool is_ident_char(char c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '-';
+    // '/' lets device registers be written `mouse/x`, `con/byte`, etc.
+    return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '/';
 }
 
 static Token make_token(TokenKind kind, uint32_t start_line, uint32_t start_col) {

@@ -1,4 +1,5 @@
 #include "beancraft/opt.h"
+#include "beancraft/devices.h"
 #include <stdio.h>
 
 // ---------------------------------------------------------------------------
@@ -225,6 +226,10 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
     uint32_t *inst_map = arena_alloc_zero(arena, prog->inst_count * sizeof(uint32_t));
     bool *consumed = arena_alloc_zero(arena, prog->inst_count * sizeof(bool));
 
+    // A device register has side effects on inc/deb; never fold a loop over one.
+    bool *is_dev = arena_alloc_zero(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(bool));
+    for (uint32_t r = 0; r < prog->reg_count; r++) is_dev[r] = device_name_is_known(prog->reg_names[r]->data);
+
     // Pass 1: detect patterns, mark the instructions they cover as consumed.
     Pattern *patterns = arena_alloc(arena, prog->inst_count * sizeof(Pattern));
     uint32_t pattern_count = 0;
@@ -232,6 +237,10 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
         if (consumed[i]) continue;
         Pattern p = ir_detect_pattern(prog, i);
         if (p.type == PATTERN_NONE) continue;
+
+        bool touches_device = is_dev[p.src_reg];
+        for (uint32_t d = 0; d < p.dst_count && !touches_device; d++) touches_device = is_dev[p.dst_regs[d]];
+        if (touches_device) continue;   // leave device-register loops as plain inc/deb
 
         patterns[pattern_count++] = p;
         opt->patterns_found++;

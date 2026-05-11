@@ -56,9 +56,9 @@ $(BUILDDIR)/test_%: $(TESTDIR)/test_%.c $(LIB_OBJS)
 clean:
 	rm -rf $(BUILDDIR) $(TARGET) libbcruntime.a
 
-# QBE runtime library for compiled programs (the bignum implementation plus the
-# bc_* shims the generated code calls; same arithmetic the interpreter uses).
-libbcruntime.a: $(BUILDDIR)/qbe_runtime.o $(BUILDDIR)/bignum.o
+# QBE runtime library for compiled programs: the bignum implementation, the
+# bc_* shims the generated code calls, and the device subsystem.
+libbcruntime.a: $(BUILDDIR)/qbe_runtime.o $(BUILDDIR)/bignum.o $(BUILDDIR)/devices.o
 	ar rcs $@ $^
 
 $(BUILDDIR)/qbe_runtime.o: $(SRCDIR)/qbe_runtime.c

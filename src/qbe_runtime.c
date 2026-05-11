@@ -7,9 +7,16 @@
 // interpreter agree on every result.
 
 #include "beancraft/bignum.h"
+#include "beancraft/devices.h"
 #include <stdint.h>
 
 // --- operations invoked from generated code -------------------------------
+
+// `inc R` where R is a device inc-trigger: fire its side effect (no increment).
+void bc_dev_inc(uint64_t reg) { device_on_inc((uint32_t)reg); }
+// `deb R` where R is a device poll register: let the device refresh its regs.
+void bc_dev_deb(uint64_t reg) { device_on_deb((uint32_t)reg); }
+
 
 void bc_inc(Bignum *reg) {
     bignum_inc(reg);

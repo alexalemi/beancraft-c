@@ -1,4 +1,5 @@
 #include "beancraft/ir.h"
+#include "beancraft/devices.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -249,6 +250,19 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
     halt->reg = 0;
     halt->arg_a = 0;
     halt->arg_b = 0;
+
+    // For each device register used, make sure its implicit data registers exist
+    // (e.g. con/emit needs con/byte) so the runtime has somewhere to put data.
+    {
+        uint32_t orig = prog->reg_count;
+        for (uint32_t i = 0; i < orig; i++) {
+            uint32_t dep_count;
+            const char *const *deps = device_dependencies(prog->reg_names[i]->data, &dep_count);
+            for (uint32_t d = 0; d < dep_count; d++) {
+                find_or_add_reg(prog, str_intern_cstr(strings, deps[d]));
+            }
+        }
+    }
 
     // Add the :nil register
     ir_add_nil_reg(prog);

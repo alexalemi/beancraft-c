@@ -1,4 +1,5 @@
 #include "beancraft/interp.h"
+#include "beancraft/devices.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,8 @@ InterpState *interp_new(Arena *arena, const IrOptProgram *prog) {
     state->pc = 0;
     state->steps = 0;
     state->halted = false;
+    state->inc_mask = NULL;
+    state->deb_mask = NULL;
 
     state->regs = arena_alloc(arena, sizeof(Bignum) * prog->reg_count);
     for (uint32_t i = 0; i < prog->reg_count; i++) {
@@ -70,11 +73,18 @@ void interp_step(InterpState *state) {
 
     switch (inst->op) {
     case IR_OPT_INC:
-        bignum_inc(&state->regs[inst->reg]);
+        if (state->inc_mask && state->inc_mask[inst->reg]) {
+            device_on_inc(inst->reg);  // a device trigger: side effect, no actual increment
+        } else {
+            bignum_inc(&state->regs[inst->reg]);
+        }
         state->pc = inst->arg_a;
         break;
 
     case IR_OPT_DEB:
+        if (state->deb_mask && state->deb_mask[inst->reg]) {
+            device_on_deb(inst->reg);  // a device poll: let it refresh its registers first
+        }
         if (bignum_dec(&state->regs[inst->reg])) {
             state->pc = inst->arg_b;   // was positive, decremented
         } else {

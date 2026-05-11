@@ -1,0 +1,66 @@
+# Print the current time as HH:MM:SS, via the datetime and console devices.
+
+func copy From To {                # To := From  (non-destructive; tmp is private)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                    # R += N   (N is a value argument, consumed)
+  l: - N d
+  + R l
+  d:
+}
+
+func put2 N {                      # print N (0..99) as two ASCII digits.  Destroys N.
+  dl: - N t0                       # divmod N by 10:  q = N/10 (the tens digit),
+      - N t1                       #   and we exit to t<N mod 10>
+      - N t2
+      - N t3
+      - N t4
+      - N t5
+      - N t6
+      - N t7
+      - N t8
+      - N t9
+      + q dl
+  t9: + ones t8                    # at t<d>, count `ones` up to d, then emit
+  t8: + ones t7
+  t7: + ones t6
+  t6: + ones t5
+  t5: + ones t4
+  t4: + ones t3
+  t3: + ones t2
+  t2: + ones t1
+  t1: + ones t0
+  t0: addn 48 con/byte             # con/byte := '0'
+      eq: - q ee
+          + con/byte eq            # con/byte += q   (the tens digit)
+      ee: inc con/emit             # emit the tens digit
+          addn 48 con/byte         # con/byte := '0'
+          eo: - ones ef
+              + con/byte eo        # con/byte += ones
+          ef: inc con/emit         # emit the ones digit
+          ret:
+}
+
+inc time/now
+
+copy time/hour h
+put2 h
+addn 58 con/byte                   # ':'
+inc con/emit
+
+copy time/min m
+put2 m
+addn 58 con/byte
+inc con/emit
+
+copy time/sec s
+put2 s
+addn 10 con/byte                   # '\n'
+inc con/emit

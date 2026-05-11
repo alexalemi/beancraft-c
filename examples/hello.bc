@@ -1,0 +1,11 @@
+# print "Hi\n" via the console device
+func addn N R {        # R += N   (N is a value argument, consumed; R aliases a register)
+  loop: - N done
+  + R loop
+}
+addn 72 con/byte       # 'H'
+inc con/emit
+addn 105 con/byte      # 'i'
+inc con/emit
+addn 10 con/byte       # '\n'
+inc con/emit

@@ -1,0 +1,4 @@
+# echo stdin to stdout, byte by byte, until EOF
+loop: deb con/read done emit      # read a byte: EOF -> con/read=0 -> done; byte (in con/byte) -> con/read=1, consume -> emit
+emit: inc con/emit loop           # write con/byte to stdout (clearing it), then -> loop
+done:

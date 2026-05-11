@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "beancraft/qbe.h"
+#include "beancraft/devices.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -89,6 +90,29 @@ static void emit_step_check(QbeBuffer *buf, uint32_t i) {
 // Compute %ptr = &bc_regs[reg].
 static void emit_reg_ptr(QbeBuffer *buf, const char *name, uint32_t reg) {
     buf_printf(buf, "    %%%s =l add $bc_regs, %u\n", name, reg * 8);
+}
+
+// `inc reg; goto next` -- but if reg is a device inc-trigger, fire its side
+// effect instead of incrementing.
+static void emit_inc(QbeBuffer *buf, Str **names, uint32_t reg, uint32_t next) {
+    if (device_name_is_inc_trigger(names[reg]->data)) {
+        buf_printf(buf, "    call $bc_dev_inc(l %u)\n", reg);
+    } else {
+        emit_reg_ptr(buf, "ptr", reg);
+        buf_puts(buf, "    call $bc_inc(l %ptr)\n");
+    }
+    buf_printf(buf, "    jmp @inst_%u\n\n", next);
+}
+
+// `deb reg; goto (was-positive ? nz : jz)` -- if reg is a device poll register,
+// let the device refresh its registers first.
+static void emit_deb(QbeBuffer *buf, Str **names, uint32_t reg, uint32_t nz, uint32_t jz) {
+    if (device_name_is_deb_poll(names[reg]->data)) {
+        buf_printf(buf, "    call $bc_dev_deb(l %u)\n", reg);
+    }
+    emit_reg_ptr(buf, "ptr", reg);
+    buf_puts(buf, "    %was_positive =w call $bc_dec(l %ptr)\n");
+    buf_printf(buf, "    jnz %%was_positive, @inst_%u, @inst_%u\n\n", nz, jz);
 }
 
 // The @exit block and the closing brace of $bc_run.
@@ -184,15 +208,10 @@ BcResult qbe_generate(FILE *out, const IrProgram *prog, QbeOptions opts) {
 
         switch (inst->op) {
         case IR_INC:
-            emit_reg_ptr(&buf, "ptr", inst->reg);
-            buf_puts(&buf, "    call $bc_inc(l %ptr)\n");
-            buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
+            emit_inc(&buf, prog->reg_names, inst->reg, inst->arg_a);
             break;
         case IR_DEB:
-            emit_reg_ptr(&buf, "ptr", inst->reg);
-            buf_puts(&buf, "    %was_positive =w call $bc_dec(l %ptr)\n");
-            buf_printf(&buf, "    jnz %%was_positive, @inst_%u, @inst_%u\n\n",
-                       inst->arg_b, inst->arg_a);
+            emit_deb(&buf, prog->reg_names, inst->reg, inst->arg_b, inst->arg_a);
             break;
         case IR_END:
             buf_puts(&buf, "    jmp @exit\n\n");
@@ -227,16 +246,11 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
 
         switch (inst->op) {
         case IR_OPT_INC:
-            emit_reg_ptr(&buf, "ptr", inst->reg);
-            buf_puts(&buf, "    call $bc_inc(l %ptr)\n");
-            buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
+            emit_inc(&buf, prog->reg_names, inst->reg, inst->arg_a);
             break;
 
         case IR_OPT_DEB:
-            emit_reg_ptr(&buf, "ptr", inst->reg);
-            buf_puts(&buf, "    %was_positive =w call $bc_dec(l %ptr)\n");
-            buf_printf(&buf, "    jnz %%was_positive, @inst_%u, @inst_%u\n\n",
-                       inst->arg_b, inst->arg_a);
+            emit_deb(&buf, prog->reg_names, inst->reg, inst->arg_b, inst->arg_a);
             break;
 
         case IR_OPT_END:

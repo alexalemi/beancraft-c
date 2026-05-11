@@ -1,0 +1,18 @@
+# Emit `n` random bytes to stdout (try:  beancraft examples/rand.bc n=32 | xxd).
+
+func copy From To {
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+copy n cnt
+go: - cnt done
+inc rand/next
+copy rand/byte con/byte
+inc con/emit go
+done:

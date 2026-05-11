@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "beancraft/loader.h"
 #include "beancraft/parser.h"
+#include "beancraft/devices.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -170,6 +171,7 @@ static Str *apply_reg_mapping(const InlineCtx *ic, Str *reg) {
             break;
         }
     }
+    if (device_name_is_known(reg->data)) return reg;   // device registers are global
     return make_scoped_name(ic->strings, ic->scope, reg);
 }
 

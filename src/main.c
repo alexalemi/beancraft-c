@@ -7,6 +7,7 @@
 #include "beancraft/interp.h"
 #include "beancraft/qbe.h"
 #include "beancraft/opt.h"
+#include "beancraft/devices.h"
 #include "beancraft/error.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +70,7 @@ int main(int argc, char *argv[]) {
     bool emit_urm = false;
     bool optimize = false;
     bool show_opt = false;
+    bool steps_set = false;
     uint64_t max_steps = DEFAULT_MAX_STEPS;
 
     int opt;
@@ -85,6 +87,7 @@ int main(int argc, char *argv[]) {
             break;
         case 's':
             max_steps = (uint64_t)atoll(optarg);
+            steps_set = true;
             break;
         case 'l':
             list_regs = true;
@@ -295,12 +298,27 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Wire up devices (if the program references any magic register). A program
+    // that does I/O is typically an interactive loop, so drop the step cap
+    // unless one was given explicitly.
+    {
+        const char **dev_names = arena_alloc(arena, opt_prog->reg_count * sizeof(char *));
+        for (uint32_t i = 0; i < opt_prog->reg_count; i++) dev_names[i] = opt_prog->reg_names[i]->data;
+        if (device_init(dev_names, opt_prog->reg_count, state->regs)) {
+            state->inc_mask = device_inc_mask();
+            state->deb_mask = device_deb_mask();
+            if (!steps_set) max_steps = UINT64_MAX;
+            if (!verbose) quiet = true;   // a device program's output is its output; no register dump
+        }
+    }
+
     // Run
     if (verbose) {
         printf("Running (max %lu steps)...\n", max_steps);
     }
 
     interp_run(state, max_steps);
+    device_shutdown();
 
     // Output results
     if (!quiet) {

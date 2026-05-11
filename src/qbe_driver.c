@@ -1,9 +1,11 @@
 // Driver program for QBE-compiled Beancraft programs.
-// Linked with qbe_runtime.c, src/bignum.c and the QBE-generated code.
+// Linked with qbe_runtime.c, src/bignum.c, src/devices.c and the QBE-generated
+// code. (Compiled without -I, so it declares its externs rather than #include.)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 // Provided by the QBE-generated code
@@ -15,6 +17,8 @@ extern const char *bc_reg_names[];
 // Provided by the runtime
 extern void bc_init_reg(uint64_t *reg, uint64_t value);
 extern char *bc_bignum_to_string(uint64_t reg);
+extern bool device_init(const char **reg_names, uint32_t reg_count, uint64_t *regs);
+extern void device_shutdown(void);
 
 // A Bignum holding zero is the tagged value 1 (see beancraft/bignum.h).
 #define BC_BIGNUM_ZERO 1ULL
@@ -32,6 +36,7 @@ static int64_t find_reg(const char *name, uint64_t count) {
 int main(int argc, char *argv[]) {
     uint64_t max_steps = 10000000;
     int verbose = 0;
+    bool steps_set = false;
 
     // bc_regs lives in zero-initialised storage; turn each slot into a valid
     // Bignum zero before anything touches it.
@@ -39,6 +44,9 @@ int main(int argc, char *argv[]) {
     for (uint64_t i = 0; i < reg_count; i++) {
         bc_regs[i] = BC_BIGNUM_ZERO;
     }
+
+    // Wire up devices (no-op unless the program references any magic register).
+    bool uses_devices = device_init(bc_reg_names, (uint32_t)reg_count, bc_regs);
 
     // Parse command line arguments for register values
     for (int i = 1; i < argc; i++) {
@@ -50,6 +58,7 @@ int main(int argc, char *argv[]) {
         }
         if (strcmp(arg, "-s") == 0 || strcmp(arg, "--max-steps") == 0) {
             if (i + 1 < argc) max_steps = (uint64_t)strtoull(argv[++i], NULL, 10);
+            steps_set = true;
             continue;
         }
 
@@ -83,24 +92,28 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // A program that does I/O is usually an interactive loop; drop the step cap
+    // unless one was given explicitly.
+    if (uses_devices && !steps_set) max_steps = UINT64_MAX;
+
     if (verbose) {
         printf("Running (max %lu steps)...\n", max_steps);
     }
     uint64_t steps = bc_run(max_steps);
+    device_shutdown();
 
-    printf("Results:\n");
-    for (uint64_t i = 0; i < reg_count; i++) {
-        const char *name = bc_reg_names[i];
-        if (name[0] == ':') continue;  // skip internal registers like :nil
-
-        char *value = bc_bignum_to_string(bc_regs[i]);
-        printf("%s = %s\n", name, value);
-        free(value);
+    // Don't print the register dump for device programs (it would clobber their
+    // output); a non-device program prints it as before, and -v forces it.
+    if (!uses_devices || verbose) {
+        printf("Results:\n");
+        for (uint64_t i = 0; i < reg_count; i++) {
+            const char *name = bc_reg_names[i];
+            if (name[0] == ':') continue;  // skip internal registers like :nil
+            char *value = bc_bignum_to_string(bc_regs[i]);
+            printf("%s = %s\n", name, value);
+            free(value);
+        }
+        if (verbose) printf("\nCompleted in %lu steps\n", steps);
     }
-
-    if (verbose) {
-        printf("\nCompleted in %lu steps\n", steps);
-    }
-
     return 0;
 }
