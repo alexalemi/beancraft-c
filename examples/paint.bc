@@ -1,0 +1,30 @@
+# Paint with the mouse: a white pixel follows the cursor, leaving a trail.
+# Press any key to quit.  (Mouse needs the SDL backend -- `bccompile --sdl` or
+# `make sdl`; on the terminal renderer there is no mouse, so only the key quit
+# works.)
+
+func copy From To {                # To := From   (non-destructive; tmp is private)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                    # R += N   (N is a value argument, consumed)
+  l: - N d
+  + R l
+  d:
+}
+
+addn 15 screen/color               # ANSI white
+
+loop: inc screen/flush             # blit, pump input
+      deb mouse/event check onMouse  # mouse moved/clicked?  no -> check, yes -> onMouse
+onMouse: copy mouse/x screen/x
+         copy mouse/y screen/y
+         inc screen/plot           # draw a white pixel at the cursor
+check: deb kbd/event loop quit     # key pressed?  no -> loop, yes -> quit
+quit:

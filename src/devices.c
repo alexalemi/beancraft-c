@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#ifdef BC_SDL
+#include <SDL2/SDL.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Magic-register catalogue
@@ -26,8 +29,8 @@ enum DevOp {
     DEV_SCR_PLOT, DEV_SCR_CLEAR, DEV_SCR_FLUSH,
     DEV_INC_LAST = DEV_SCR_FLUSH,
     // deb-polls (`deb R` lets the device refresh its registers first)
-    DEV_CON_READ, DEV_KBD_EVENT,
-    DEV_POLL_LAST = DEV_KBD_EVENT,
+    DEV_CON_READ, DEV_KBD_EVENT, DEV_MOUSE_EVENT,
+    DEV_POLL_LAST = DEV_MOUSE_EVENT,
 };
 
 static bool op_is_inc_trigger(int op) { return op >= DEV_SYS_HALT && op <= DEV_INC_LAST; }
@@ -58,7 +61,9 @@ static const struct { const char *name; int op; } MAGIC[] = {
     { "screen/clear", DEV_SCR_CLEAR    },
     { "screen/flush", DEV_SCR_FLUSH    },
     { "kbd/event",    DEV_KBD_EVENT    },
-    { "kbd/char",     DEV_DATA         },
+    { "kbd/char",     DEV_DATA }, { "kbd/code", DEV_DATA },
+    { "mouse/event",  DEV_MOUSE_EVENT  },
+    { "mouse/x",      DEV_DATA }, { "mouse/y", DEV_DATA }, { "mouse/buttons", DEV_DATA },
 };
 #define N_MAGIC (sizeof(MAGIC) / sizeof(MAGIC[0]))
 
@@ -73,15 +78,16 @@ bool device_name_is_inc_trigger(const char *name) { return op_is_inc_trigger(mag
 bool device_name_is_deb_poll(const char *name)    { return op_is_deb_poll(magic_op(name)); }
 bool device_name_is_known(const char *name)       { return magic_op(name) != DEV_NONE; }
 
-static const char *const DEP_CON[]  = { "con/byte" };
-static const char *const DEP_TIME[] = { "time/year", "time/month", "time/day", "time/hour",
-                                        "time/min", "time/sec", "time/dow", "time/yday" };
+static const char *const DEP_CON[]   = { "con/byte" };
+static const char *const DEP_TIME[]  = { "time/year", "time/month", "time/day", "time/hour",
+                                         "time/min", "time/sec", "time/dow", "time/yday" };
 static const char *const DEP_RNEXT[] = { "rand/byte" };
 static const char *const DEP_RSEED[] = { "rand/seed" };
 static const char *const DEP_EXIT[]  = { "sys/code" };
 static const char *const DEP_PALSET[] = { "palette/index", "palette/r", "palette/g", "palette/b" };
 static const char *const DEP_PLOT[]  = { "screen/x", "screen/y", "screen/color" };
-static const char *const DEP_KBD[]   = { "kbd/char" };
+static const char *const DEP_KBD[]   = { "kbd/char", "kbd/code" };
+static const char *const DEP_MOUSE[] = { "mouse/x", "mouse/y", "mouse/buttons" };
 static const char *const DEP_SCRSZ[] = { "screen/width", "screen/height" };
 
 const char *const *device_dependencies(const char *name, uint32_t *count) {
@@ -93,8 +99,8 @@ const char *const *device_dependencies(const char *name, uint32_t *count) {
     case DEV_SYS_EXIT:     *count = 1; return DEP_EXIT;
     case DEV_PAL_SET:      *count = 4; return DEP_PALSET;
     case DEV_SCR_PLOT:     *count = 3; return DEP_PLOT;
-    case DEV_KBD_EVENT:    *count = 1; return DEP_KBD;
-    // Any screen op also wants the size registers so the program can read them.
+    case DEV_KBD_EVENT:    *count = 2; return DEP_KBD;
+    case DEV_MOUSE_EVENT:  *count = 3; return DEP_MOUSE;
     case DEV_SCR_CLEAR: case DEV_SCR_FLUSH: *count = 2; return DEP_SCRSZ;
     default:               *count = 0; return NULL;
     }
@@ -111,39 +117,52 @@ static struct {
     uint32_t n;
 
     bool *inc_mask, *deb_mask;
-    int  *op_of;          // DevOp per register
+    int  *op_of;
 
-    // data-register indices (-1 if absent)
     int i_sys_code, i_con_byte;
-    int i_time[8];        // year, month, day, hour, min, sec, dow, yday
+    int i_time[8];
     int i_rand_byte, i_rand_seed;
     int i_pal_index, i_pal_r, i_pal_g, i_pal_b;
     int i_scr_x, i_scr_y, i_scr_color, i_scr_w, i_scr_h;
-    int i_kbd_char;
+    int i_kbd_char, i_kbd_code;
+    int i_mouse_x, i_mouse_y, i_mouse_buttons;
 
     uint64_t rng;
 
-    // screen
+    // screen (one back buffer of palette indices; only displayed on flush)
     bool have_screen;
-    uint8_t *fb;          // scr_w * scr_h palette indices
+    uint8_t *fb;
     uint32_t scr_w, scr_h;
-    uint32_t pal[256];    // 0x00RRGGBB
+    uint32_t pal[256];
     struct timespec last_flush;
-    bool alt_screen;
+    bool alt_screen;             // terminal renderer active
+    bool sdl_active;             // SDL renderer active (only ever true with BC_SDL)
 
     // keyboard / tty
-    bool kbd_raw;
+    bool kbd_raw;                // raw/non-blocking stdin (terminal kbd path)
     struct termios saved_tio;
     bool tio_saved;
-    uint8_t kq[256];      // ring buffer of pending key bytes
+    struct { uint8_t ch, code; } kq[256];
     int kq_head, kq_tail;
+
+    // mouse (filled by the SDL event pump; the terminal backend never updates it)
+    uint32_t mouse_x, mouse_y, mouse_buttons;
+    bool mouse_changed;
+
+#ifdef BC_SDL
+    SDL_Window   *sdl_win;
+    SDL_Renderer *sdl_ren;
+    SDL_Texture  *sdl_tex;
+    uint32_t     *sdl_rgb;       // scr_w*scr_h ARGB scratch for the texture
+#endif
 } D = {
     .i_sys_code = -1, .i_con_byte = -1,
     .i_time = { -1, -1, -1, -1, -1, -1, -1, -1 },
     .i_rand_byte = -1, .i_rand_seed = -1,
     .i_pal_index = -1, .i_pal_r = -1, .i_pal_g = -1, .i_pal_b = -1,
     .i_scr_x = -1, .i_scr_y = -1, .i_scr_color = -1, .i_scr_w = -1, .i_scr_h = -1,
-    .i_kbd_char = -1,
+    .i_kbd_char = -1, .i_kbd_code = -1,
+    .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,
 };
 
 static void set_reg(int idx, uint64_t value) {
@@ -177,7 +196,7 @@ static uint64_t rng_next(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Screen / keyboard helpers
+// Screen / keyboard helpers (shared)
 // ---------------------------------------------------------------------------
 
 // The standard xterm 256-colour layout: 16 system colours, a 6x6x6 cube, 24 greys.
@@ -198,49 +217,24 @@ static void init_palette(void) {
     }
 }
 
-static void kq_push(uint8_t b) {
+static void kq_push(uint8_t ch, uint8_t code) {
     int next = (D.kq_tail + 1) & 0xff;
-    if (next != D.kq_head) { D.kq[D.kq_tail] = b; D.kq_tail = next; }  // drop on overflow
+    if (next != D.kq_head) { D.kq[D.kq_tail].ch = ch; D.kq[D.kq_tail].code = code; D.kq_tail = next; }
 }
-static int kq_pop(void) {  // -1 if empty
-    if (D.kq_head == D.kq_tail) return -1;
-    uint8_t b = D.kq[D.kq_head];
+static bool kq_pop(uint8_t *ch, uint8_t *code) {
+    if (D.kq_head == D.kq_tail) return false;
+    *ch = D.kq[D.kq_head].ch; *code = D.kq[D.kq_head].code;
     D.kq_head = (D.kq_head + 1) & 0xff;
-    return b;
+    return true;
 }
+// Non-blocking read of all pending stdin bytes into the key queue (terminal path).
 static void drain_keys(void) {
     if (!D.kbd_raw) return;
     uint8_t buf[128];
-    ssize_t n;
-    while ((n = read(STDIN_FILENO, buf, sizeof buf)) > 0) {
-        for (ssize_t i = 0; i < n; i++) kq_push(buf[i]);
+    ssize_t nr;
+    while ((nr = read(STDIN_FILENO, buf, sizeof buf)) > 0) {
+        for (ssize_t i = 0; i < nr; i++) kq_push(buf[i], buf[i]);
     }
-}
-
-// Render the framebuffer to the terminal: two stacked pixels per cell, drawn
-// with U+2580 "upper half block" (foreground = top pixel, background = bottom).
-static void screen_render(void) {
-    static char *out = NULL;
-    static size_t cap = 0;
-    size_t need = (size_t)D.scr_w * D.scr_h * 40 + 64;
-    if (need > cap) { out = realloc(out, need); cap = need; }
-    char *p = out;
-    p += sprintf(p, "\x1b[H");                           // cursor home (no clear -> no flicker)
-    int last_fg = -1, last_bg = -1;
-    for (uint32_t cy = 0; cy * 2 < D.scr_h; cy++) {
-        if (cy) { p += sprintf(p, "\x1b[0m\r\n"); last_fg = last_bg = -1; }
-        uint32_t y0 = cy * 2, y1 = y0 + 1;
-        for (uint32_t x = 0; x < D.scr_w; x++) {
-            uint32_t fg = D.pal[D.fb[y0 * D.scr_w + x]];
-            uint32_t bg = (y1 < D.scr_h) ? D.pal[D.fb[y1 * D.scr_w + x]] : 0;
-            if ((int)fg != last_fg) { p += sprintf(p, "\x1b[38;2;%u;%u;%um", fg >> 16 & 0xff, fg >> 8 & 0xff, fg & 0xff); last_fg = (int)fg; }
-            if ((int)bg != last_bg) { p += sprintf(p, "\x1b[48;2;%u;%u;%um", bg >> 16 & 0xff, bg >> 8 & 0xff, bg & 0xff); last_bg = (int)bg; }
-            *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x80';  // UTF-8 for U+2580
-        }
-    }
-    p += sprintf(p, "\x1b[0m");
-    fwrite(out, 1, (size_t)(p - out), stdout);
-    fflush(stdout);
 }
 
 static void screen_vsync(void) {
@@ -253,9 +247,127 @@ static void screen_vsync(void) {
         nanosleep(&d, NULL);
         clock_gettime(CLOCK_MONOTONIC, &D.last_flush);
     } else {
-        D.last_flush = now;   // running behind: don't try to catch up
+        D.last_flush = now;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Terminal screen renderer (no dependencies)
+// ---------------------------------------------------------------------------
+
+// Two stacked pixels per text cell, drawn with U+2580 "upper half block"
+// (foreground = top pixel, background = bottom), SGR codes coalesced into runs.
+static void term_render(void) {
+    static char *out = NULL;
+    static size_t cap = 0;
+    size_t need = (size_t)D.scr_w * D.scr_h * 40 + 64;
+    if (need > cap) { out = realloc(out, need); cap = need; }
+    char *p = out;
+    p += sprintf(p, "\x1b[H");
+    int last_fg = -1, last_bg = -1;
+    for (uint32_t cy = 0; cy * 2 < D.scr_h; cy++) {
+        if (cy) { p += sprintf(p, "\x1b[0m\r\n"); last_fg = last_bg = -1; }
+        uint32_t y0 = cy * 2, y1 = y0 + 1;
+        for (uint32_t x = 0; x < D.scr_w; x++) {
+            uint32_t fg = D.pal[D.fb[y0 * D.scr_w + x]];
+            uint32_t bg = (y1 < D.scr_h) ? D.pal[D.fb[y1 * D.scr_w + x]] : 0;
+            if ((int)fg != last_fg) { p += sprintf(p, "\x1b[38;2;%u;%u;%um", fg >> 16 & 0xff, fg >> 8 & 0xff, fg & 0xff); last_fg = (int)fg; }
+            if ((int)bg != last_bg) { p += sprintf(p, "\x1b[48;2;%u;%u;%um", bg >> 16 & 0xff, bg >> 8 & 0xff, bg & 0xff); last_bg = (int)bg; }
+            *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x80';   // UTF-8 for U+2580
+        }
+    }
+    p += sprintf(p, "\x1b[0m");
+    fwrite(out, 1, (size_t)(p - out), stdout);
+    fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------
+// SDL screen renderer (opt-in: build with -DBC_SDL)
+// ---------------------------------------------------------------------------
+#ifdef BC_SDL
+#define SDL_LOGICAL_W 256
+#define SDL_LOGICAL_H 192
+
+static bool sdl_init(void) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return false;
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   // nearest-neighbour scaling
+    D.sdl_win = SDL_CreateWindow("beancraft", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                 SDL_LOGICAL_W * 3, SDL_LOGICAL_H * 3, SDL_WINDOW_RESIZABLE);
+    if (!D.sdl_win) { SDL_Quit(); return false; }
+    D.sdl_ren = SDL_CreateRenderer(D.sdl_win, -1, 0);
+    if (!D.sdl_ren) { SDL_DestroyWindow(D.sdl_win); SDL_Quit(); return false; }
+    SDL_RenderSetLogicalSize(D.sdl_ren, SDL_LOGICAL_W, SDL_LOGICAL_H);
+    D.sdl_tex = SDL_CreateTexture(D.sdl_ren, SDL_PIXELFORMAT_ARGB8888,
+                                  SDL_TEXTUREACCESS_STREAMING, SDL_LOGICAL_W, SDL_LOGICAL_H);
+    if (!D.sdl_tex) { SDL_DestroyRenderer(D.sdl_ren); SDL_DestroyWindow(D.sdl_win); SDL_Quit(); return false; }
+    D.scr_w = SDL_LOGICAL_W;
+    D.scr_h = SDL_LOGICAL_H;
+    D.fb = calloc((size_t)D.scr_w * D.scr_h, 1);
+    D.sdl_rgb = malloc((size_t)D.scr_w * D.scr_h * 4);
+    init_palette();
+    clock_gettime(CLOCK_MONOTONIC, &D.last_flush);
+    SDL_StartTextInput();
+    return true;
+}
+
+static void sdl_pump_events(void) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        switch (e.type) {
+        case SDL_QUIT:
+            exit(0);
+        case SDL_TEXTINPUT:
+            for (const char *c = e.text.text; *c; c++) kq_push((uint8_t)*c, (uint8_t)*c);
+            break;
+        case SDL_KEYDOWN: {
+            SDL_Keycode k = e.key.keysym.sym;
+            if (k == SDLK_RETURN || k == SDLK_ESCAPE || k == SDLK_BACKSPACE || k == SDLK_TAB || k == SDLK_DELETE)
+                kq_push((uint8_t)k, (uint8_t)k);            // ASCII control keys
+            else if (k == SDLK_UP)    kq_push(0, 1);        // arrows -> small codes 1..4
+            else if (k == SDLK_DOWN)  kq_push(0, 2);
+            else if (k == SDLK_LEFT)  kq_push(0, 3);
+            else if (k == SDLK_RIGHT) kq_push(0, 4);
+            // printable keys arrive via SDL_TEXTINPUT
+            break;
+        }
+        case SDL_MOUSEMOTION:
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP: {
+            int wx, wy;
+            uint32_t b = SDL_GetMouseState(&wx, &wy);
+            float lx = 0, ly = 0;
+            SDL_RenderWindowToLogical(D.sdl_ren, wx, wy, &lx, &ly);
+            int li = (int)lx, lj = (int)ly;
+            if (li < 0) li = 0; else if (li >= (int)D.scr_w) li = (int)D.scr_w - 1;
+            if (lj < 0) lj = 0; else if (lj >= (int)D.scr_h) lj = (int)D.scr_h - 1;
+            D.mouse_x = (uint32_t)li; D.mouse_y = (uint32_t)lj;
+            D.mouse_buttons = (uint32_t)(((b & SDL_BUTTON_LMASK) ? 1 : 0)
+                                       | ((b & SDL_BUTTON_MMASK) ? 2 : 0)
+                                       | ((b & SDL_BUTTON_RMASK) ? 4 : 0));
+            D.mouse_changed = true;
+            break;
+        }
+        default: break;
+        }
+    }
+}
+
+static void sdl_render(void) {
+    size_t n = (size_t)D.scr_w * D.scr_h;
+    for (size_t i = 0; i < n; i++) D.sdl_rgb[i] = 0xff000000u | D.pal[D.fb[i]];
+    SDL_UpdateTexture(D.sdl_tex, NULL, D.sdl_rgb, (int)(D.scr_w * 4));
+    SDL_RenderClear(D.sdl_ren);
+    SDL_RenderCopy(D.sdl_ren, D.sdl_tex, NULL, NULL);
+    SDL_RenderPresent(D.sdl_ren);
+}
+
+static void sdl_shutdown(void) {
+    if (D.sdl_tex) SDL_DestroyTexture(D.sdl_tex);
+    if (D.sdl_ren) SDL_DestroyRenderer(D.sdl_ren);
+    if (D.sdl_win) SDL_DestroyWindow(D.sdl_win);
+    SDL_Quit();
+}
+#endif // BC_SDL
 
 // ---------------------------------------------------------------------------
 // Setup / teardown
@@ -274,39 +386,45 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     D.deb_mask = calloc(reg_count, sizeof(bool));
     D.op_of = malloc(reg_count * sizeof(int));
 
-    bool wants_screen = false, wants_kbd = false;
+    bool wants_screen = false, wants_kbd = false, wants_mouse = false;
     for (uint32_t i = 0; i < reg_count; i++) {
         int op = magic_op(reg_names[i]);
         D.op_of[i] = op;
         if (op_is_inc_trigger(op)) D.inc_mask[i] = true;
         if (op_is_deb_poll(op))    D.deb_mask[i] = true;
-        if (op != DEV_NONE && strncmp(reg_names[i], "screen/", 7) == 0) wants_screen = true;
-        if (op != DEV_NONE && strncmp(reg_names[i], "palette/", 8) == 0) wants_screen = true;
-        if (op == DEV_KBD_EVENT || (op == DEV_DATA && strncmp(reg_names[i], "kbd/", 4) == 0)) wants_kbd = true;
+        if (op != DEV_NONE) {
+            if (!strncmp(reg_names[i], "screen/", 7) || !strncmp(reg_names[i], "palette/", 8)) wants_screen = true;
+            if (!strncmp(reg_names[i], "kbd/", 4))   wants_kbd = true;
+            if (!strncmp(reg_names[i], "mouse/", 6)) wants_mouse = true;
+        }
 
         const char *nm = reg_names[i];
-        if      (!strcmp(nm, "sys/code"))      D.i_sys_code = (int)i;
-        else if (!strcmp(nm, "con/byte"))      D.i_con_byte = (int)i;
-        else if (!strcmp(nm, "time/year"))     D.i_time[0] = (int)i;
-        else if (!strcmp(nm, "time/month"))    D.i_time[1] = (int)i;
-        else if (!strcmp(nm, "time/day"))      D.i_time[2] = (int)i;
-        else if (!strcmp(nm, "time/hour"))     D.i_time[3] = (int)i;
-        else if (!strcmp(nm, "time/min"))      D.i_time[4] = (int)i;
-        else if (!strcmp(nm, "time/sec"))      D.i_time[5] = (int)i;
-        else if (!strcmp(nm, "time/dow"))      D.i_time[6] = (int)i;
-        else if (!strcmp(nm, "time/yday"))     D.i_time[7] = (int)i;
-        else if (!strcmp(nm, "rand/byte"))     D.i_rand_byte = (int)i;
-        else if (!strcmp(nm, "rand/seed"))     D.i_rand_seed = (int)i;
-        else if (!strcmp(nm, "palette/index")) D.i_pal_index = (int)i;
-        else if (!strcmp(nm, "palette/r"))     D.i_pal_r = (int)i;
-        else if (!strcmp(nm, "palette/g"))     D.i_pal_g = (int)i;
-        else if (!strcmp(nm, "palette/b"))     D.i_pal_b = (int)i;
-        else if (!strcmp(nm, "screen/x"))      D.i_scr_x = (int)i;
-        else if (!strcmp(nm, "screen/y"))      D.i_scr_y = (int)i;
-        else if (!strcmp(nm, "screen/color"))  D.i_scr_color = (int)i;
-        else if (!strcmp(nm, "screen/width"))  D.i_scr_w = (int)i;
-        else if (!strcmp(nm, "screen/height")) D.i_scr_h = (int)i;
-        else if (!strcmp(nm, "kbd/char"))      D.i_kbd_char = (int)i;
+        if      (!strcmp(nm, "sys/code"))       D.i_sys_code = (int)i;
+        else if (!strcmp(nm, "con/byte"))       D.i_con_byte = (int)i;
+        else if (!strcmp(nm, "time/year"))      D.i_time[0] = (int)i;
+        else if (!strcmp(nm, "time/month"))     D.i_time[1] = (int)i;
+        else if (!strcmp(nm, "time/day"))       D.i_time[2] = (int)i;
+        else if (!strcmp(nm, "time/hour"))      D.i_time[3] = (int)i;
+        else if (!strcmp(nm, "time/min"))       D.i_time[4] = (int)i;
+        else if (!strcmp(nm, "time/sec"))       D.i_time[5] = (int)i;
+        else if (!strcmp(nm, "time/dow"))       D.i_time[6] = (int)i;
+        else if (!strcmp(nm, "time/yday"))      D.i_time[7] = (int)i;
+        else if (!strcmp(nm, "rand/byte"))      D.i_rand_byte = (int)i;
+        else if (!strcmp(nm, "rand/seed"))      D.i_rand_seed = (int)i;
+        else if (!strcmp(nm, "palette/index"))  D.i_pal_index = (int)i;
+        else if (!strcmp(nm, "palette/r"))      D.i_pal_r = (int)i;
+        else if (!strcmp(nm, "palette/g"))      D.i_pal_g = (int)i;
+        else if (!strcmp(nm, "palette/b"))      D.i_pal_b = (int)i;
+        else if (!strcmp(nm, "screen/x"))       D.i_scr_x = (int)i;
+        else if (!strcmp(nm, "screen/y"))       D.i_scr_y = (int)i;
+        else if (!strcmp(nm, "screen/color"))   D.i_scr_color = (int)i;
+        else if (!strcmp(nm, "screen/width"))   D.i_scr_w = (int)i;
+        else if (!strcmp(nm, "screen/height"))  D.i_scr_h = (int)i;
+        else if (!strcmp(nm, "kbd/char"))       D.i_kbd_char = (int)i;
+        else if (!strcmp(nm, "kbd/code"))       D.i_kbd_code = (int)i;
+        else if (!strcmp(nm, "mouse/x"))        D.i_mouse_x = (int)i;
+        else if (!strcmp(nm, "mouse/y"))        D.i_mouse_y = (int)i;
+        else if (!strcmp(nm, "mouse/buttons"))  D.i_mouse_buttons = (int)i;
     }
 
     struct timespec ts;
@@ -314,21 +432,16 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     D.rng = 0x9e3779b97f4a7c15ULL ^ ((uint64_t)ts.tv_sec << 20) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)getpid() << 40);
     if (D.rng == 0) D.rng = 1;
 
-    if (wants_kbd) {
-        // On a real terminal, switch to raw, no-echo input; from a pipe/file
-        // there's no termios to set, but we still want non-blocking reads.
-        if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &D.saved_tio) == 0) {
-            D.tio_saved = true;
-            struct termios raw = D.saved_tio;
-            raw.c_lflag &= ~(unsigned)(ICANON | ECHO);   // keep ISIG so Ctrl-C still quits
-            raw.c_cc[VMIN] = 0; raw.c_cc[VTIME] = 0;
-            tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        }
-        int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
-        if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
-        D.kbd_raw = true;
-    }
-
+#ifdef BC_SDL
+    if ((wants_screen || wants_mouse) && sdl_init()) {
+        D.sdl_active = true;
+        D.have_screen = true;
+        set_reg(D.i_scr_w, D.scr_w);
+        set_reg(D.i_scr_h, D.scr_h);
+    } else
+#else
+    (void)wants_mouse;   // the mouse device only exists in the SDL build
+#endif
     if (wants_screen) {
         D.have_screen = true;
         init_palette();
@@ -344,10 +457,24 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         set_reg(D.i_scr_h, D.scr_h);
         clock_gettime(CLOCK_MONOTONIC, &D.last_flush);
         if (isatty(STDOUT_FILENO)) {
-            fputs("\x1b[?1049h\x1b[?25l\x1b[2J", stdout);  // alt screen, hide cursor, clear
+            fputs("\x1b[?1049h\x1b[?25l\x1b[2J", stdout);
             fflush(stdout);
             D.alt_screen = true;
         }
+    }
+
+    // Terminal keyboard path: only when we're not driving an SDL window.
+    if (wants_kbd && !D.sdl_active) {
+        if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &D.saved_tio) == 0) {
+            D.tio_saved = true;
+            struct termios raw = D.saved_tio;
+            raw.c_lflag &= ~(unsigned)(ICANON | ECHO);   // keep ISIG so Ctrl-C still quits
+            raw.c_cc[VMIN] = 0; raw.c_cc[VTIME] = 0;
+            tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        }
+        int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+        if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
+        D.kbd_raw = true;
     }
 
     atexit(device_shutdown);
@@ -356,7 +483,10 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
 
 void device_shutdown(void) {
     if (!D.active) return;
-    D.active = false;   // make idempotent before doing anything that might re-enter
+    D.active = false;
+#ifdef BC_SDL
+    if (D.sdl_active) { sdl_shutdown(); return; }
+#endif
     if (D.alt_screen) { fputs("\x1b[0m\x1b[?25h\x1b[?1049l", stdout); fflush(stdout); }
     if (D.kbd_raw) {
         int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
@@ -372,6 +502,13 @@ const bool *device_deb_mask(void) { return D.active ? D.deb_mask : NULL; }
 // ---------------------------------------------------------------------------
 // The hooks
 // ---------------------------------------------------------------------------
+
+static void pump_input(void) {
+#ifdef BC_SDL
+    if (D.sdl_active) { sdl_pump_events(); return; }
+#endif
+    drain_keys();
+}
 
 void device_on_inc(uint32_t i) {
     switch (D.op_of[i]) {
@@ -432,11 +569,11 @@ void device_on_inc(uint32_t i) {
         break;
 
     case DEV_SCR_FLUSH:
+#ifdef BC_SDL
+        if (D.sdl_active) { sdl_pump_events(); sdl_render(); screen_vsync(); break; }
+#endif
         drain_keys();
-        if (D.have_screen) {
-            if (D.alt_screen) screen_render();
-            screen_vsync();
-        }
+        if (D.have_screen) { if (D.alt_screen) term_render(); screen_vsync(); }
         break;
     }
 }
@@ -454,13 +591,27 @@ void device_on_deb(uint32_t i) {
         break;
     }
     case DEV_KBD_EVENT: {
-        drain_keys();
-        int c = kq_pop();
-        if (c < 0) {
-            set_reg((int)i, 0);                     // no key -> deb -> "none"
-        } else {
-            set_reg(D.i_kbd_char, (uint64_t)c);
+        pump_input();
+        uint8_t ch, code;
+        if (kq_pop(&ch, &code)) {
+            set_reg(D.i_kbd_char, (uint64_t)ch);
+            set_reg(D.i_kbd_code, (uint64_t)code);
             set_reg((int)i, 1);                     // a key -> deb consumes, "got"
+        } else {
+            set_reg((int)i, 0);                     // no key -> deb -> "none"
+        }
+        break;
+    }
+    case DEV_MOUSE_EVENT: {
+        pump_input();
+        if (D.mouse_changed) {
+            D.mouse_changed = false;
+            set_reg(D.i_mouse_x, D.mouse_x);
+            set_reg(D.i_mouse_y, D.mouse_y);
+            set_reg(D.i_mouse_buttons, D.mouse_buttons);
+            set_reg((int)i, 1);
+        } else {
+            set_reg((int)i, 0);
         }
         break;
     }

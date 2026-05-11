@@ -1,0 +1,52 @@
+# A pixel bouncing around the screen, cycling through all 256 palette colours,
+# leaving a multicoloured trail.  Press any key to quit.  Works on the terminal
+# renderer or, with `make sdl` / `bccompile --sdl`, in an SDL window.
+
+func copy From To {                # To := From   (non-destructive; tmp is private)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+# --- init: x = y = 0, dirx = diry = 1 (moving +), xleft = W-1, yleft = H-1 ---
+copy screen/width xleft
+- xleft i1 i1                      # xleft := W - 1
+i1: copy screen/height yleft
+- yleft i2 i2                      # yleft := H - 1
+i2: + dirx i3                      # dirx := 1
+i3: + diry frame                   # diry := 1
+
+# --- per frame ---
+frame:
+  copy x screen/x
+  copy y screen/y
+  inc screen/plot                  # plot pixel (x, y) in the current colour
+  inc screen/color                 # cycle the colour (mod 256 on plot)
+
+  # bounce x within [0, W-1] using dirx (1=+, 0=-), invariant xleft = W-1-x
+  - dirx mvLx mvRxd
+mvRxd: + dirx mvRx                  # dirx was 1: restore the peek
+mvRx:  - xleft flipLx goRx          # at right wall (xleft==0)? flip : (xleft-- ; goRx)
+goRx:  + x updY                     # moved right: x++
+flipLx: - dirx updY updY            # hit right wall: dirx 1 -> 0
+mvLx:  - x flipRx goLx              # at left wall (x==0)? flip : (x-- ; goLx)
+goLx:  + xleft updY                 # moved left: xleft++
+flipRx: + dirx updY                 # hit left wall: dirx 0 -> 1
+
+  # bounce y within [0, H-1] using diry / yleft
+updY:  - diry mvLy mvRyd
+mvRyd: + diry mvRy
+mvRy:  - yleft flipLy goRy
+goRy:  + y endF
+flipLy: - diry endF endF
+mvLy:  - y flipRy goLy
+goLy:  + yleft endF
+flipRy: + diry endF
+
+endF:  inc screen/flush            # blit, drain input, sleep to next 60 Hz tick
+       deb kbd/event frame quit    # key pressed? no -> frame, yes -> quit
+quit:

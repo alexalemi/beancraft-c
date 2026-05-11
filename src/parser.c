@@ -297,10 +297,19 @@ static bool parse_one(Parser *p, AstNode *node) {
         node->column = saved.column;
         advance(p);  // ':'
 
-        // A bare label at end of line/file (or before '}') marks the implicit
-        // halt -- lets a program name its exit point (e.g. a trailing `done:`).
-        if (check(p, TOK_NEWLINE) || check(p, TOK_EOF) || check(p, TOK_RBRACE)) {
+        // A label at the very end (file/func body) marks the implicit halt /
+        // return -- lets a program name its exit point (e.g. a trailing `done:`).
+        if (check(p, TOK_EOF) || check(p, TOK_RBRACE)) {
             node->kind = AST_END;
+            return true;
+        }
+        // A label on its own line is a no-op that falls through to the next
+        // statement -- so `loop:` then the body on following lines works.
+        if (check(p, TOK_NEWLINE)) {
+            node->kind = AST_DEB;
+            node->deb.reg = str_intern_cstr(p->strings, ":nil");
+            node->deb.jump = jump_keyword(KW_NEXT);
+            node->deb.next = jump_keyword(KW_NEXT);
             return true;
         }
     }

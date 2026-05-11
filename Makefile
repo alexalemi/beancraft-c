@@ -1,10 +1,15 @@
 CC = cc
 CFLAGS = -O2 -Wall -Wextra -Wpedantic -std=c11 -I include
 LDFLAGS =
+LDLIBS =
 
 # Debug build
 DEBUG_CFLAGS = -g -O0 -DDEBUG -fsanitize=address,undefined -I include
 DEBUG_LDFLAGS = -fsanitize=address,undefined
+
+# Opt-in SDL backend (window + mouse + key events) for the Screen device.
+SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
+SDL_LIBS   := $(shell pkg-config --libs sdl2 2>/dev/null || echo -lSDL2)
 
 SRCDIR = src
 INCDIR = include/beancraft
@@ -22,7 +27,7 @@ LIB_OBJS = $(filter-out $(BUILDDIR)/main.o,$(OBJS))
 
 TARGET = beancraft
 
-.PHONY: all clean debug test
+.PHONY: all clean debug test sdl
 
 all: $(BUILDDIR) $(TARGET)
 
@@ -30,11 +35,15 @@ debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = $(DEBUG_LDFLAGS)
 debug: $(BUILDDIR) $(TARGET)
 
+sdl: CFLAGS += -DBC_SDL $(SDL_CFLAGS)
+sdl: LDLIBS += $(SDL_LIBS)
+sdl: $(BUILDDIR) $(TARGET)
+
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<

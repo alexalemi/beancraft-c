@@ -25,6 +25,7 @@ usage() {
     echo "  -O        Enable loop optimizations (TRANSFER, ZERO patterns)"
     echo "  -O0       Disable optimizations"
     echo "  -g        Include debug info in the binary"
+    echo "  --sdl     Build the Screen device against SDL (window + mouse + key events)"
     echo "  -v        Verbose output"
 }
 
@@ -38,12 +39,16 @@ OUTPUT=""
 CFLAGS="-O2"
 VERBOSE=""
 BC_OPT=""
+SDL_CFLAGS=""
+SDL_LIBS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -O)  CFLAGS="-O2"; BC_OPT="-O" ;;
         -O0) CFLAGS="-O0"; BC_OPT="" ;;
         -g)  CFLAGS="$CFLAGS -g" ;;
+        --sdl) SDL_CFLAGS="-DBC_SDL $(pkg-config --cflags sdl2 2>/dev/null)"
+               SDL_LIBS="$(pkg-config --libs sdl2 2>/dev/null || echo -lSDL2)" ;;
         -v)  VERBOSE=1 ;;
         -h|--help) usage; exit 0 ;;
         *)
@@ -83,8 +88,8 @@ qbe -o "$TMPDIR/prog.s" "$TMPDIR/prog.ssa"
 cc $CFLAGS -c -o "$TMPDIR/prog.o" "$TMPDIR/prog.s"
 cc $CFLAGS -I "$INCLUDE_DIR" -c -o "$TMPDIR/runtime.o" "$RUNTIME_C"
 cc $CFLAGS -I "$INCLUDE_DIR" -c -o "$TMPDIR/bignum.o" "$BIGNUM_C"
-cc $CFLAGS -I "$INCLUDE_DIR" -c -o "$TMPDIR/devices.o" "$DEVICES_C"
+cc $CFLAGS $SDL_CFLAGS -I "$INCLUDE_DIR" -c -o "$TMPDIR/devices.o" "$DEVICES_C"
 cc $CFLAGS -c -o "$TMPDIR/driver.o" "$DRIVER_C"
-cc $CFLAGS -o "$OUTPUT" "$TMPDIR/prog.o" "$TMPDIR/runtime.o" "$TMPDIR/bignum.o" "$TMPDIR/devices.o" "$TMPDIR/driver.o"
+cc $CFLAGS -o "$OUTPUT" "$TMPDIR/prog.o" "$TMPDIR/runtime.o" "$TMPDIR/bignum.o" "$TMPDIR/devices.o" "$TMPDIR/driver.o" $SDL_LIBS
 
 if [ -n "$VERBOSE" ]; then echo "Done: $OUTPUT"; fi
