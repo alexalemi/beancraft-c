@@ -1,0 +1,17 @@
+# A red pixel walking diagonally across the screen, wrapping; leaves a trail.
+# Press any key to quit.  (Screen device, terminal renderer, keyboard.)
+
+func addn N R {          # R += N   (N is a value argument, consumed)
+  l: - N d
+  + R l
+  d:
+}
+
+addn 196 screen/color    # a bright red from the colour cube
+
+loop: inc screen/plot            # plot pixel (screen/x mod W, screen/y mod H), colour screen/color
+      inc screen/x               # walk right (wraps via the plot's mod W)
+      inc screen/y               # walk down  (wraps via the plot's mod H)
+      inc screen/flush           # blit the back buffer, drain input, sleep to next 60 Hz tick
+      deb kbd/event loop quit    # a key was pressed?  no -> loop, yes -> quit
+quit:
