@@ -1,36 +1,57 @@
-# Building blocks of a universal register machine: an unbounded LIFO list packed
-# into a single register, via the pairing function any URM uses to encode its
-# tape / register file.
+# A universal counter machine: a fetch / decode / execute interpreter for
+# another counter machine whose program is supplied as encoded data.
 #
-#   push x onto rest  ==  rest := 2^x * (2*rest + 1)
-#   pop               ==  the inverse: head x = number of factors of 2, then
-#                         strip the trailing odd bit to get the rest.
+# The simulated machine has registers s0..s3 and a program that is a list of
+# instructions. Each instruction is three list elements (t, r, g):
+#   t = 0 : inc s_r ;  PC := g
+#   t = 1 : if s_r == 0 then PC := g  else  ( s_r-- ; PC := PC + 1 )
+#   t = 2 : halt
+# The list is the standard pairing encoding -- push x onto L  ==  L := 2^x*(2L+1)
+# -- so an entire program is just one ordinary integer.
 #
-# `push` and `pop` are written with the loop idioms the optimiser recognises:
-# the "double" loop becomes one multi-destination TRANSFER, and the parity-
-# extracting "halve" loop becomes one DIVMOD. So with `-O` each operation runs
-# in time polynomial in the list's bit-length, instead of the ~2^bit-length
-# counter steps the naive expansion needs. A full universal machine is just
-# fetch/decode/execute glue around exactly these operations, and that glue is
-# cheap -- so the optimised building blocks are what make a URM "runnable".
+# The driver below loads this 5-instruction program (which computes s2 := s0+s1):
+#   0:  t=1 r=0 g=2     # while s0 > 0:
+#   1:  t=0 r=2 g=0     #     s2++ ; s0-- ; goto 0   (the s0-- is part of instr 0)
+#   2:  t=1 r=1 g=4     # while s1 > 0:
+#   3:  t=0 r=2 g=2     #     s2++ ; s1-- ; goto 2
+#   4:  halt
+# Run with e.g.  `bccompile examples/urm.bc -O && ./urm s0=3 s1=4`  ->  s2 = 7.
 #
-# Driver: push A, B, C onto the list, then pop everything back, summing the
-# popped values into Out (so Out = A + B + C) and leaving the list empty (L = 0).
+# Every list operation here (push / pop / copy) is written so the optimiser
+# folds its inner loops to O(1) ops. Without `-O` a single pop of the program
+# list takes ~2^(bit-length of P) counter steps -- it overflows the step limit.
+# With `-O` the whole simulation runs in a few thousand steps. That fold is the
+# entire reason a universal machine is "runnable" on a counter machine.
+
+# --------------------------------------------------------------------------
+# list / arithmetic primitives
+# --------------------------------------------------------------------------
 
 func clear X {
     - X done self
 }
 
-# push X onto list L (consumes X):  L := 2^X * (2*L + 1)
+# non-destructive copy:  To := From,  From left unchanged.  (tmp is private.)
+func copy From To {
+    - tmp clrTo self
+    clrTo: - To loop self
+    loop:  - From restore        # From -> {To, tmp}   (the optimiser: one TRANSFER)
+           + To
+           + tmp loop
+    restore: - tmp done          # tmp -> {From}        (one TRANSFER)
+             + From restore
+}
+
+# push X onto list L (X is consumed):  L := 2^X * (2*L + 1)
 func push X L {
-    - Z setOne self            # Z := 0
-    setOne: + Z dblL           # Z := 1
-    dblL:  - L moveZ           # Z := 1 + 2*L  (two +Z per decrement of L)
+    - Z setOne self
+    setOne: + Z dblL
+    dblL:  - L moveZ             # L -> {Z, Z}  ==  Z := 2*L; then below Z := 2*L + 1
            + Z
            + Z dblL
-    moveZ: - Z afterDbl        # L := Z   (= 2*L + 1)
+    moveZ: - Z afterDbl          # Z -> {L}
            + L moveZ
-    afterDbl: - X done dblX    # then double L exactly X times
+    afterDbl: - X done dblX      # then double L exactly X times
     dblX:  - L moveZ2
            + Z
            + Z dblX
@@ -38,37 +59,87 @@ func push X L {
             + L moveZ2
 }
 
-# pop the head of list L into X, setting gotone := 1. If L is empty (0), leave
-# X = 0 and gotone = 0. On success L is replaced by the rest of the list.
-func pop L X gotone {
+# pop the head of list L into X, setting got := 1.  Empty list -> X = 0, got = 0.
+func pop L X got {
     - X clrG self
-    clrG: - gotone chk self
-    chk:  - L empty            # peek: if L == 0 return, else restore and peel
+    clrG: - got chk self
+    chk:  - L empty              # peek: empty -> return; else restore and peel
     peek: + L peel
     empty: end
-
-    # L > 0 here. Halve L repeatedly; every even halving adds a factor of 2 to X,
-    # the odd halving leaves L holding the rest and stops.
-    peel:  - L wasEven         # \  divmod L by 2: quotient -> Z, parity routes the
-           - L wasOdd          #  } jump. The optimiser folds these three lines
-           + Z peel            # /  into a single DIVMOD.
-    wasEven: - Z bumpX         # L := L/2
+    peel:  - L wasEven           # divmod L by 2: quotient -> Z, parity routes the
+           - L wasOdd            # jump.  (the optimiser folds these three lines
+           + Z peel              # into a single DIVMOD.)
+    wasEven: - Z bumpX           # L := L / 2
              + L wasEven
-    bumpX: + X peel            # X++, keep peeling
-    wasOdd:  - Z setG          # L := rest
+    bumpX: + X peel              # X gained a factor of 2; keep going
+    wasOdd:  - Z setG            # L := rest
              + L wasOdd
-    setG: + gotone done        # gotone := 1, return
+    setG: + got done             # got := 1
 }
 
-clear L
-clear Out
+# --------------------------------------------------------------------------
+# load the program (pushed bottom-to-top: instr 4 first, instr 0 last)
+# --------------------------------------------------------------------------
 
-push A L
-push B L
-push C L
+clear P
+clear PC
 
-popLoop: pop L v gotone
-- gotone done
-addV: - v popLoop
-+ Out addV
-done:
+push 0 P     # instr 4 = (2,0,0):  g
+push 0 P     #                     r
+push 2 P     #                     t
+push 2 P     # instr 3 = (0,2,2):  g
+push 2 P     #                     r
+push 0 P     #                     t
+push 4 P     # instr 2 = (1,1,4):  g
+push 1 P     #                     r
+push 1 P     #                     t
+push 0 P     # instr 1 = (0,2,0):  g
+push 2 P     #                     r
+push 0 P     #                     t
+push 2 P     # instr 0 = (1,0,2):  g
+push 0 P     #                     r
+push 1 P     #                     t
+
+# --------------------------------------------------------------------------
+# fetch / decode / execute loop
+# --------------------------------------------------------------------------
+
+step: copy P Q                   # Q := a fresh, readable copy of the program
+copy PC pcb                      # pcb := PC  (PC kept; pcb consumed below)
+clear skip
+mul3: - pcb skipLoop             # skip := 3 * PC
+      + skip
+      + skip
+      + skip mul3
+skipLoop: - skip readInst        # discard the first `skip` elements of Q
+pop Q discardV discardF
+- zer0 skipLoop                  # goto skipLoop  (zer0 is never written -> always 0)
+
+readInst: pop Q t gott           # read the current instruction (t, r, g)
+pop Q r gotr
+pop Q g gotg
+
+- t isInc                        # decode t:  0 -> isInc,  1 -> isDeb,  2+ -> halt
+- t isDeb
+isHalt: end
+
+isInc: - r incS0                 # inc s_r ; PC := g
+       - r incS1
+       - r incS2
+incS3: + s3 setPC
+incS0: + s0 setPC
+incS1: + s1 setPC
+incS2: + s2 setPC
+
+isDeb: - r debS0                 # if s_r == 0: PC := g  else: s_r-- ; PC := PC + 1
+       - r debS1
+       - r debS2
+debS3: - s3 setPC pcInc
+debS0: - s0 setPC pcInc
+debS1: - s1 setPC pcInc
+debS2: - s2 setPC pcInc
+
+setPC: clear PC                  # PC := g
+movG:  - g step
+       + PC movG
+pcInc: + PC step                 # PC := PC + 1
