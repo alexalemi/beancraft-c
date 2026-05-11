@@ -1,0 +1,153 @@
+# Pong (one-player "wall ball"): a paddle on the left, a ball that bounces off
+# the top, bottom, and right walls.  Hit the ball with the paddle and it bounces
+# back; miss it (on the left) and the ball respawns at the centre-left.
+#
+#   W -- move the paddle up      S -- move the paddle down      Q -- quit
+#
+# Works on the terminal renderer or, with `make sdl` / `bccompile --sdl`, in a
+# window.  The paddle keys are 'w'/'s' (arrow keys aren't decoded -- on a
+# terminal they arrive as multi-byte escape sequences, which we just ignore).
+#
+# Beancraft has no comparisons, so collision is a counter-machine trick: the ball
+# carries "mirror" coordinates bxright = W-1-bx and byright = H-1-by, kept in sync
+# with bx/by, so the wall bounces are just `deb` against the mirror -- no compare.
+# The paddle's vertical extent does need a real comparison ("is the ball's y in
+# [py, py+24)?"), which is `inrange` below: two lockstep-decrement phases.
+
+func clear X { - X done self }              # X := 0
+
+func copy From To {                          # To := From   (From preserved; tmp private)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                              # R += N        (N is a value, consumed)
+  l: - N done
+     + R l
+}
+
+func subn N R {                              # R := max(0, R - N)   (N consumed)
+  l: - N done
+     - R l l
+}
+
+func iseq A B R {                            # R := 1 if A == B else 0  (A, B consumed)
+  - R c0 self                                # R := 0
+  c0: - A aZ aN
+  aZ: - B yes done                           # A==0: B==0 -> equal; B>0 -> A<B, return 0
+  aN: - B done c0                             # A>0:  B==0 -> A>B, return 0; B>0 -> loop
+  yes: + R
+}
+
+func inrange A B R {                         # R := 1 if B <= A < B+24 else 0  (A, B kept)
+  - R r0 self                                # R := 0
+  r0: copy A a                               # a := A
+      copy B b                               # b := B
+  # phase 1: lockstep-decrement a and b.  b hits 0 first/together  <=>  A >= B,
+  # leaving a = A-B.  a hits 0 while b > 0  <=>  A < B  ->  miss (R stays 0).
+  p1:  - b p2 p1a
+  p1a: - a done p1b
+  p1b: - z p1
+  # phase 2: a = A-B >= 0.  c := 23; lockstep-decrement a and c.  a hits 0
+  # first/together  <=>  A-B <= 23  ->  in range.  c hits 0 while a > 0  ->  miss.
+  p2:  - c c0 self                            # c := 0
+  c0:  addn 23 c
+  p2a: - a yes p2b
+  p2b: - c done p2c
+  p2c: - z p2a
+  yes: + R
+}
+
+# --- init --------------------------------------------------------------------
+# Paddle: a 4 x 24 bar at x in [0, 4), top row py (starts 0).  Mirror pyleft so
+# that py + 24 + pyleft = H -- pyleft == 0 means "at the bottom".
+copy screen/height pyleft
+subn 24 pyleft
+
+# Ball: starts at (4, 4) moving down-right.  Mirrors: bxright = W-1-bx, byright = H-1-by.
+addn 4 bx
+addn 4 by
+copy screen/width bxright
+subn 5 bxright
+copy screen/height byright
+subn 5 byright
+addn 1 bdx                                   # bdx = 1: moving +x  (0: moving -x)
+addn 1 bdy                                   # bdy = 1: moving +y  (0: moving -y)
+
+# --- per frame ---------------------------------------------------------------
+frame:
+  # ball x: peek bdx without destroying it (the xRd/+bdx restores the 1)
+  - bdx xLeft xRd
+xRd:     + bdx xRight
+xRight:  - bxright bounceR goR               # at the right wall (bxright==0)?  bounce : move
+goR:     + bx xDone                          #   move right: bx++  (bxright already --'d)
+bounceR: - bdx xDone xDone                   #   hit right wall: bdx 1 -> 0
+xLeft:   - bx atWall goL                     # at the left edge (bx==0)?  paddle check : move
+goL:     + bxright xDone                     #   move left: bxright++  (bx already --'d)
+atWall:                                       # bx == 0 -- did the paddle catch it?
+  inrange by py hit
+  - hit miss bounceL                          #   hit==0 -> missed; hit==1 -> caught
+bounceL: + bdx xDone                          #   caught: bounce off the paddle, bdx 0 -> 1
+miss:                                         #   missed: respawn the ball centre-left, +x
+  addn 4 bx
+  copy screen/width bxright
+  subn 5 bxright
+  clear bdx
+  + bdx xDone
+xDone:
+  # ball y: same peek-and-bounce against byright / by
+  - bdy yUp yRd
+yRd:     + bdy yDown
+yDown:   - byright bounceD goD
+goD:     + by yEnd
+bounceD: - bdy yEnd yEnd
+yUp:     - by bounceU goU
+goU:     + byright yEnd
+bounceU: + bdy yEnd
+yEnd:
+  # --- draw ---
+  inc screen/clear
+  clear screen/x                              # paddle: white 4 x 24 at (0, py)
+  copy py screen/y
+  clear screen/color
+  addn 15 screen/color
+  clear screen/rectw
+  addn 4 screen/rectw
+  clear screen/recth
+  addn 24 screen/recth
+  inc screen/rect
+  copy bx screen/x                            # ball: yellow 2 x 2 at (bx, by)
+  copy by screen/y
+  clear screen/color
+  addn 11 screen/color
+  clear screen/rectw
+  addn 2 screen/rectw
+  clear screen/recth
+  addn 2 screen/recth
+  inc screen/rect
+  inc screen/flush                            # blit, drain input, sleep to the next 60 Hz tick
+  # --- input: drain every queued key this frame ---
+poll: deb kbd/event noKey gotKey
+noKey: - z frame
+gotKey: copy kbd/char k
+  iseq k 113 flag                             # 'q' -> quit
+  - flag chkW doQuit
+chkW: copy kbd/char k
+  iseq k 119 flag                             # 'w' -> paddle up
+  - flag chkS doUp
+chkS: copy kbd/char k
+  iseq k 115 flag                             # 's' -> paddle down
+  - flag poll doDown                          # anything else -> ignore, drain the next
+doQuit: - z quit
+doUp:   - py upDone doMvU                      # up: py--, pyleft++  (unless py==0, at the top)
+doMvU:  + pyleft upDone
+upDone: - z poll
+doDown: - pyleft dnDone doMvD                  # down: py++, pyleft--  (unless pyleft==0, bottom)
+doMvD:  + py dnDone
+dnDone: - z poll
+quit:
