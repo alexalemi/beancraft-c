@@ -48,6 +48,10 @@ int main(int argc, char *argv[]) {
             verbose = 1;
             continue;
         }
+        if (strcmp(arg, "-s") == 0 || strcmp(arg, "--max-steps") == 0) {
+            if (i + 1 < argc) max_steps = (uint64_t)strtoull(argv[++i], NULL, 10);
+            continue;
+        }
 
         char *eq = strchr(arg, '=');
         if (!eq) {
