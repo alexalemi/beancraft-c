@@ -1,0 +1,75 @@
+# Draw "BEANS" with the built-in 8x8 font and a hand-drawn sprite, on the screen.
+# Press any key to quit.  (Screen device: text / sprite / rect.)
+
+func clear X { - X done self }
+
+func copy From To {
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop: - From restore
+  + To
+  + tmp loop
+  restore: - tmp done
+  + From restore
+}
+
+func addn N R {                  # R += N   (N is a value argument, consumed)
+  l: - N d
+  + R l
+  d:
+}
+
+func at X Y {                    # move the cursor: screen/x := X, screen/y := Y
+  clear screen/x
+  ax: - X axd
+  + screen/x ax
+  axd: clear screen/y
+  ay: - Y ayd
+  + screen/y ay
+  ayd:
+}
+
+func putc C {                    # draw character C; screen/text advances x by 8 and zeroes glyph
+  l: - C d
+  + screen/glyph l
+  d: inc screen/text
+}
+
+# "BEANS" in bright cyan at (8, 8)
+clear screen/color
+addn 14 screen/color
+at 8 8
+putc 66
+putc 69
+putc 65
+putc 78
+putc 83
+
+# a hand-drawn 8x8 arrow sprite at (8, 24) in bright magenta
+at 8 24
+clear screen/color
+addn 13 screen/color
+addn 8   screen/row0
+addn 12  screen/row1
+addn 254 screen/row2
+addn 255 screen/row3
+addn 255 screen/row4
+addn 254 screen/row5
+addn 12  screen/row6
+addn 8   screen/row7
+inc screen/sprite
+
+# a green status bar across the bottom
+at 0 44
+clear screen/color
+addn 10 screen/color
+clear screen/rectw
+copy screen/width screen/rectw
+clear screen/recth
+addn 4 screen/recth
+inc screen/rect
+
+inc screen/flush
+wait: inc screen/flush
+      deb kbd/event wait quit
+quit:

@@ -11,6 +11,7 @@
 #ifdef BC_SDL
 #include <SDL2/SDL.h>
 #endif
+#include "font8x8.h"
 
 // ---------------------------------------------------------------------------
 // Magic-register catalogue
@@ -27,7 +28,8 @@ enum DevOp {
     DEV_RAND_NEXT, DEV_RAND_SETSEED,
     DEV_PAL_SET,
     DEV_SCR_PLOT, DEV_SCR_CLEAR, DEV_SCR_FLUSH,
-    DEV_INC_LAST = DEV_SCR_FLUSH,
+    DEV_SCR_SPRITE, DEV_SCR_RECT, DEV_SCR_TEXT,
+    DEV_INC_LAST = DEV_SCR_TEXT,
     // deb-polls (`deb R` lets the device refresh its registers first)
     DEV_CON_READ, DEV_KBD_EVENT, DEV_MOUSE_EVENT,
     DEV_POLL_LAST = DEV_MOUSE_EVENT,
@@ -60,6 +62,13 @@ static const struct { const char *name; int op; } MAGIC[] = {
     { "screen/plot",  DEV_SCR_PLOT     },
     { "screen/clear", DEV_SCR_CLEAR    },
     { "screen/flush", DEV_SCR_FLUSH    },
+    { "screen/row0",  DEV_DATA }, { "screen/row1", DEV_DATA }, { "screen/row2", DEV_DATA }, { "screen/row3", DEV_DATA },
+    { "screen/row4",  DEV_DATA }, { "screen/row5", DEV_DATA }, { "screen/row6", DEV_DATA }, { "screen/row7", DEV_DATA },
+    { "screen/sprite", DEV_SCR_SPRITE  },
+    { "screen/rectw", DEV_DATA }, { "screen/recth", DEV_DATA },
+    { "screen/rect",  DEV_SCR_RECT     },
+    { "screen/glyph", DEV_DATA },
+    { "screen/text",  DEV_SCR_TEXT     },
     { "kbd/event",    DEV_KBD_EVENT    },
     { "kbd/char",     DEV_DATA }, { "kbd/code", DEV_DATA },
     { "mouse/event",  DEV_MOUSE_EVENT  },
@@ -89,6 +98,11 @@ static const char *const DEP_PLOT[]  = { "screen/x", "screen/y", "screen/color" 
 static const char *const DEP_KBD[]   = { "kbd/char", "kbd/code" };
 static const char *const DEP_MOUSE[] = { "mouse/x", "mouse/y", "mouse/buttons" };
 static const char *const DEP_SCRSZ[] = { "screen/width", "screen/height" };
+static const char *const DEP_SPRITE[] = { "screen/x", "screen/y", "screen/color",
+    "screen/row0", "screen/row1", "screen/row2", "screen/row3",
+    "screen/row4", "screen/row5", "screen/row6", "screen/row7" };
+static const char *const DEP_RECT[]  = { "screen/x", "screen/y", "screen/color", "screen/rectw", "screen/recth" };
+static const char *const DEP_TEXT[]  = { "screen/x", "screen/y", "screen/color", "screen/glyph" };
 
 const char *const *device_dependencies(const char *name, uint32_t *count) {
     switch (magic_op(name)) {
@@ -99,6 +113,9 @@ const char *const *device_dependencies(const char *name, uint32_t *count) {
     case DEV_SYS_EXIT:     *count = 1; return DEP_EXIT;
     case DEV_PAL_SET:      *count = 4; return DEP_PALSET;
     case DEV_SCR_PLOT:     *count = 3; return DEP_PLOT;
+    case DEV_SCR_SPRITE:   *count = 11; return DEP_SPRITE;
+    case DEV_SCR_RECT:     *count = 5; return DEP_RECT;
+    case DEV_SCR_TEXT:     *count = 4; return DEP_TEXT;
     case DEV_KBD_EVENT:    *count = 2; return DEP_KBD;
     case DEV_MOUSE_EVENT:  *count = 3; return DEP_MOUSE;
     case DEV_SCR_CLEAR: case DEV_SCR_FLUSH: *count = 2; return DEP_SCRSZ;
@@ -124,6 +141,7 @@ static struct {
     int i_rand_byte, i_rand_seed;
     int i_pal_index, i_pal_r, i_pal_g, i_pal_b;
     int i_scr_x, i_scr_y, i_scr_color, i_scr_w, i_scr_h;
+    int i_scr_row[8], i_scr_rectw, i_scr_recth, i_scr_glyph;
     int i_kbd_char, i_kbd_code;
     int i_mouse_x, i_mouse_y, i_mouse_buttons;
 
@@ -161,6 +179,7 @@ static struct {
     .i_rand_byte = -1, .i_rand_seed = -1,
     .i_pal_index = -1, .i_pal_r = -1, .i_pal_g = -1, .i_pal_b = -1,
     .i_scr_x = -1, .i_scr_y = -1, .i_scr_color = -1, .i_scr_w = -1, .i_scr_h = -1,
+    .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1,
     .i_kbd_char = -1, .i_kbd_code = -1,
     .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,
 };
@@ -248,6 +267,30 @@ static void screen_vsync(void) {
         clock_gettime(CLOCK_MONOTONIC, &D.last_flush);
     } else {
         D.last_flush = now;
+    }
+}
+
+// Blit an 8x8 1-bit bitmap into the back buffer at top-left (x, y): for each
+// set bit, fb := color (bit 0 of each row byte is the leftmost pixel); clear
+// bits are transparent. Pixels past the screen edge are dropped (no wrap).
+static void blit_bitmap(uint32_t x, uint32_t y, const uint8_t rows[8], uint8_t color) {
+    if (!D.fb) return;
+    for (uint32_t r = 0; r < 8 && y + r < D.scr_h; r++) {
+        uint8_t bits = rows[r];
+        for (uint32_t c = 0; c < 8 && x + c < D.scr_w; c++) {
+            if (bits & (1u << c)) D.fb[(y + r) * D.scr_w + (x + c)] = color;
+        }
+    }
+}
+
+// Fill a w x h rectangle of the back buffer at top-left (x, y) with `color`,
+// clipped to the screen (so huge w/h cost only the visible part).
+static void fill_rect(uint32_t x, uint32_t y, uint64_t w, uint64_t h, uint8_t color) {
+    if (!D.fb) return;
+    for (uint64_t dy = 0; dy < h && y + dy < D.scr_h; dy++) {
+        for (uint64_t dx = 0; dx < w && x + dx < D.scr_w; dx++) {
+            D.fb[(y + dy) * D.scr_w + (x + dx)] = color;
+        }
     }
 }
 
@@ -420,6 +463,11 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         else if (!strcmp(nm, "screen/color"))   D.i_scr_color = (int)i;
         else if (!strcmp(nm, "screen/width"))   D.i_scr_w = (int)i;
         else if (!strcmp(nm, "screen/height"))  D.i_scr_h = (int)i;
+        else if (!strncmp(nm, "screen/row", 10) && nm[10] >= '0' && nm[10] <= '7' && nm[11] == '\0')
+                                                D.i_scr_row[nm[10] - '0'] = (int)i;
+        else if (!strcmp(nm, "screen/rectw"))   D.i_scr_rectw = (int)i;
+        else if (!strcmp(nm, "screen/recth"))   D.i_scr_recth = (int)i;
+        else if (!strcmp(nm, "screen/glyph"))   D.i_scr_glyph = (int)i;
         else if (!strcmp(nm, "kbd/char"))       D.i_kbd_char = (int)i;
         else if (!strcmp(nm, "kbd/code"))       D.i_kbd_code = (int)i;
         else if (!strcmp(nm, "mouse/x"))        D.i_mouse_x = (int)i;
@@ -567,6 +615,34 @@ void device_on_inc(uint32_t i) {
     case DEV_SCR_CLEAR:
         if (D.fb) memset(D.fb, 0, (size_t)D.scr_w * D.scr_h);
         break;
+
+    case DEV_SCR_SPRITE: {
+        uint8_t rows[8];
+        for (int k = 0; k < 8; k++) rows[k] = (uint8_t)reg_mod(D.i_scr_row[k], 256);
+        blit_bitmap((uint32_t)reg_mod(D.i_scr_x, D.scr_w ? D.scr_w : 1),
+                    (uint32_t)reg_mod(D.i_scr_y, D.scr_h ? D.scr_h : 1),
+                    rows, (uint8_t)reg_mod(D.i_scr_color, 256));
+        break;
+    }
+
+    case DEV_SCR_RECT:
+        fill_rect((uint32_t)reg_mod(D.i_scr_x, D.scr_w ? D.scr_w : 1),
+                  (uint32_t)reg_mod(D.i_scr_y, D.scr_h ? D.scr_h : 1),
+                  reg_u64(D.i_scr_rectw), reg_u64(D.i_scr_recth),
+                  (uint8_t)reg_mod(D.i_scr_color, 256));
+        break;
+
+    case DEV_SCR_TEXT: {
+        static const uint8_t blank8[8] = { 0 };
+        uint64_t g = reg_mod(D.i_scr_glyph, 256);
+        const uint8_t *rows = (g >= BC_FONT_FIRST && g <= BC_FONT_LAST) ? bc_font8x8[g - BC_FONT_FIRST] : blank8;
+        blit_bitmap((uint32_t)reg_mod(D.i_scr_x, D.scr_w ? D.scr_w : 1),
+                    (uint32_t)reg_mod(D.i_scr_y, D.scr_h ? D.scr_h : 1),
+                    rows, (uint8_t)reg_mod(D.i_scr_color, 256));
+        if (D.i_scr_x >= 0) bignum_add_into(&D.regs[D.i_scr_x], bignum_from_u64(8));  // advance for the next glyph
+        if (D.i_scr_glyph >= 0) bignum_set_zero(&D.regs[D.i_scr_glyph]);              // consume the glyph
+        break;
+    }
 
     case DEV_SCR_FLUSH:
 #ifdef BC_SDL
