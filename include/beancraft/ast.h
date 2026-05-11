@@ -99,7 +99,8 @@ typedef struct AstNode {
 
         struct {          // CALL
             Str *name;
-            Str **args;          // positional argument names (registers and/or labels)
+            Str **args;          // positional argument names; a NULL entry is a literal value
+            int64_t *arg_values; // literal value of each argument (only when args[i] == NULL)
             uint32_t arg_count;
         } call;
     };

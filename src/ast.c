@@ -109,7 +109,8 @@ void ast_print(const Ast *ast) {
         case AST_CALL:
             printf("call %s", node->call.name->data);
             for (uint32_t j = 0; j < node->call.arg_count; j++) {
-                printf(" %s", node->call.args[j]->data);
+                if (node->call.args[j]) printf(" %s", node->call.args[j]->data);
+                else printf(" %ld", node->call.arg_values[j]);
             }
             break;
         }

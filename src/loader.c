@@ -234,10 +234,14 @@ static void clone_and_transform_node(Ast *dest, const AstNode *src, const Inline
         node->call.arg_count = src->call.arg_count;
         if (src->call.arg_count > 0) {
             node->call.args = arena_alloc(dest->arena, src->call.arg_count * sizeof(Str *));
-            for (uint32_t i = 0; i < src->call.arg_count; i++)
-                node->call.args[i] = apply_reg_mapping(ic, src->call.args[i]);
+            node->call.arg_values = arena_alloc(dest->arena, src->call.arg_count * sizeof(int64_t));
+            for (uint32_t i = 0; i < src->call.arg_count; i++) {
+                node->call.arg_values[i] = src->call.arg_values[i];
+                node->call.args[i] = src->call.args[i] ? apply_reg_mapping(ic, src->call.args[i]) : NULL;
+            }
         } else {
             node->call.args = NULL;
+            node->call.arg_values = NULL;
         }
         break;
     }
@@ -417,21 +421,29 @@ static BcResult expand_call(LoaderContext *ctx, Ast *dest,
                      call_node->call.arg_count);
     }
 
-    // Bind each positional argument to its parameter: register params become
-    // register aliases, label params (~name) become label mappings.
+    // Bind each positional argument to its parameter: a register param takes a
+    // register-alias (name) or a value (literal); a label param (~name) takes a
+    // label name.
     uint32_t np = def->funcdef.param_count;
     RegMapping *rmaps = np ? arena_alloc(ctx->arena, np * sizeof(RegMapping)) : NULL;
     LabelMapping *lmaps = np ? arena_alloc(ctx->arena, np * sizeof(LabelMapping)) : NULL;
     uint32_t rn = 0, ln = 0;
     for (uint32_t i = 0; i < np; i++) {
+        bool is_value_arg = (call_node->call.args[i] == NULL);
         if (def->funcdef.param_is_label[i]) {
+            if (is_value_arg) {
+                return bc_err(ctx->arena, BC_ERR_SEMANTIC, NULL, call_node->line, 0,
+                             "function '%s': label parameter '%s' needs a label, not a value",
+                             call_node->call.name->data, def->funcdef.params[i]->data);
+            }
             lmaps[ln].local = def->funcdef.params[i];
             lmaps[ln].import = call_node->call.args[i];
             ln++;
         } else {
             rmaps[rn].local = def->funcdef.params[i];
-            rmaps[rn].import = call_node->call.args[i];
-            rmaps[rn].is_value = false;
+            rmaps[rn].is_value = is_value_arg;
+            if (is_value_arg) rmaps[rn].value = call_node->call.arg_values[i];
+            else rmaps[rn].import = call_node->call.args[i];
             rn++;
         }
     }

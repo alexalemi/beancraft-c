@@ -233,8 +233,9 @@ static bool parse_use(Parser *p, AstNode *node) {
     return true;
 }
 
-// A function call statement: `name arg arg ...`. The call name has already been
-// consumed; `p->current` is positioned at the first argument (or end of line).
+// A function call statement: `name arg arg ...`. An argument is a register/label
+// name or a literal integer. The call name has already been consumed; `p->current`
+// is positioned at the first argument (or end of line).
 static bool parse_call(Parser *p, AstNode *node, Str *name, uint32_t line, uint32_t col) {
     node->kind = AST_CALL;
     node->line = line;
@@ -242,17 +243,23 @@ static bool parse_call(Parser *p, AstNode *node, Str *name, uint32_t line, uint3
     node->call.name = name;
 
     Str *args[64];
+    int64_t vals[64];
     uint32_t n = 0;
-    while (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
+    while (check(p, TOK_IDENT) || token_is_keyword(p->current.kind) || check(p, TOK_NUMBER)) {
         if (n >= 64) { error(p, "too many call arguments"); return false; }
-        args[n++] = p->current.str;
+        if (check(p, TOK_NUMBER)) { args[n] = NULL; vals[n] = p->current.number; }
+        else { args[n] = p->current.str; vals[n] = 0; }
+        n++;
         advance(p);
     }
     if (n > 0) {
         node->call.args = arena_alloc(p->arena, n * sizeof(Str *));
         memcpy(node->call.args, args, n * sizeof(Str *));
+        node->call.arg_values = arena_alloc(p->arena, n * sizeof(int64_t));
+        memcpy(node->call.arg_values, vals, n * sizeof(int64_t));
     } else {
         node->call.args = NULL;
+        node->call.arg_values = NULL;
     }
     node->call.arg_count = n;
     return true;
