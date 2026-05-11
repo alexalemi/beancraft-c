@@ -27,6 +27,7 @@ static void print_usage(const char *prog) {
         "  --show-ir           Print intermediate representation\n"
         "  --show-ast          Print abstract syntax tree\n"
         "  --emit-qbe          Output QBE intermediate language (for compilation)\n"
+        "  --emit-urm          Output the program encoded for examples/urm.bc\n"
         "  -O, --optimize      Enable loop optimizations\n"
         "  --show-opt          Print optimized IR\n"
         "  -h, --help          Show this help\n"
@@ -50,6 +51,7 @@ static struct option long_options[] = {
     {"show-ir",    no_argument,       NULL, 'I'},
     {"show-ast",   no_argument,       NULL, 'A'},
     {"emit-qbe",   no_argument,       NULL, 'Q'},
+    {"emit-urm",   no_argument,       NULL, 'U'},
     {"optimize",   no_argument,       NULL, 'O'},
     {"show-opt",   no_argument,       NULL, 'P'},
     {"help",       no_argument,       NULL, 'h'},
@@ -64,6 +66,7 @@ int main(int argc, char *argv[]) {
     bool show_ir = false;
     bool show_ast = false;
     bool emit_qbe = false;
+    bool emit_urm = false;
     bool optimize = false;
     bool show_opt = false;
     uint64_t max_steps = DEFAULT_MAX_STEPS;
@@ -94,6 +97,9 @@ int main(int argc, char *argv[]) {
             break;
         case 'Q':
             emit_qbe = true;
+            break;
+        case 'U':
+            emit_urm = true;
             break;
         case 'O':
             optimize = true;
@@ -167,6 +173,48 @@ int main(int argc, char *argv[]) {
         printf("=== IR ===\n");
         ir_print(prog);
         printf("\n");
+    }
+
+    if (emit_urm) {
+        // Encode the program for examples/urm.bc: four list elements per
+        // instruction -- (t, r, g1, g2) -- printed as i0=.. i1=.. ...
+        //   t=0: inc s_r; PC := g1     t=1: deb s_r (jz -> g1, nz -> g2)     t=2: halt
+        // Registers map in order to s0, s1, ...; the URM has s0..s3 and room
+        // for 16 instructions.
+        if (prog->reg_count > 4) {
+            fprintf(stderr,
+                "Error: program uses %u registers; the urm.bc encoding supports at most 4\n",
+                prog->reg_count);
+            arena_free(arena);
+            return 1;
+        }
+        if (prog->inst_count > 16) {
+            fprintf(stderr,
+                "Error: program has %u instructions; the urm.bc encoding supports at most 16\n",
+                prog->inst_count);
+            arena_free(arena);
+            return 1;
+        }
+        printf("# %s -> urm.bc encoding.  registers:", filename);
+        for (uint32_t i = 0; i < prog->reg_count; i++) {
+            printf(" %s=s%u", prog->reg_names[i]->data, i);
+        }
+        printf("\n");
+        for (uint32_t i = 0; i < prog->inst_count; i++) {
+            const IrInst *in = &prog->insts[i];
+            uint32_t t, r, g1, g2;
+            switch (in->op) {
+            case IR_INC: t = 0; r = in->reg; g1 = in->arg_a; g2 = 0;          break;
+            case IR_DEB: t = 1; r = in->reg; g1 = in->arg_a; g2 = in->arg_b;  break;
+            case IR_END:
+            default:     t = 2; r = 0;       g1 = 0;          g2 = 0;          break;
+            }
+            printf("%si%u=%u i%u=%u i%u=%u i%u=%u",
+                   i ? " " : "", 4 * i, t, 4 * i + 1, r, 4 * i + 2, g1, 4 * i + 3, g2);
+        }
+        printf("\n");
+        arena_free(arena);
+        return 0;
     }
 
     // Lower to the optimized IR form. At -O0 this is a faithful 1:1 lowering;
