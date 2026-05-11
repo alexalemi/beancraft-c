@@ -1,0 +1,120 @@
+# A bouncing ball: it falls under gravity, bounces off the floor losing about a
+# quarter of its speed each time (vy := vy - vy/4 -- another use of the
+# divide-by-constant idiom), drifts sideways and bounces off the side walls with
+# no energy loss, and once it's too slow to bounce it comes to rest on the floor.
+# Press any key to quit.  Works on the terminal renderer or, with `make sdl` /
+# `bccompile --sdl`, in a window.
+#
+# Vertical position uses the mirror coordinate yr = H-1-y kept in sync with y, so
+# "at the floor" is `deb yr` against zero -- and moving vy pixels in one frame is
+# just a vy-times loop of single-pixel steps, which makes overshoot impossible.
+
+func clear X { - X done self }                     # X := 0
+
+func copy From To {                                # To := From   (From preserved)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                                    # R += N   (N is a value, consumed)
+  l: - N done
+  + R l
+}
+
+func subn N R {                                    # R := max(0, R - N)   (N consumed)
+  l: - N done
+  - R l l
+}
+
+func half X {                                      # X := floor(X / 2)   (q private)
+  - q qz self
+  qz: - X mv q1
+  q1: - X mv q2
+  q2: + q qz
+  mv: - q done qm
+  qm: + X mv
+}
+
+# --- init: ball near the top, falling, drifting right; vy = 0 (rest) ---
+copy screen/height yr
+- yr i1 i1                                          # yr := H - 1
+i1: subn 3 yr                                       # yr := H - 4   (so y = 3)
+addn 3 y
+addn 1 dy                                           # dy = 1: falling   (0: rising)
+copy screen/width xr
+- xr i2 i2                                           # xr := W - 1
+i2: addn 1 dx                                        # dx = 1: drifting right  (0: left)
+
+# --- per frame ---
+frame:
+  # gravity: speed up while falling, slow down while rising, flip at the apex
+  - dy gRise gRised
+gRised: + dy gFall
+gFall:  + vy doMoveY                                # falling: vy += 1
+gRise:  - vy apex doMoveY                           # rising: vy==0 -> apex; else vy--
+apex:   + dy doMoveY                                # apex reached: start falling (dy 0 -> 1)
+doMoveY:
+  # move |vy| pixels (down if dy==1, up if dy==0), one pixel at a time
+  copy vy ysteps
+  - dy mvUp mvDownd                                 # peek dy
+mvDownd: + dy mvDown
+mvDown: - ysteps drawX fallSt                       # falling
+fallSt: - yr floorHit fallOk                        #   at the floor (yr==0)?  bounce
+fallOk: + y mvDown                                  #   y++ (yr already --'d), next step
+floorHit:
+  clear dy                                          # dy := 0 (now rising)
+  copy vy vchk
+  subn 3 vchk
+  - vchk rest bounceLoss                            # vy <= 3 ?  rest : lose energy
+rest:   clear vy                                     #   too slow to bounce: settle on the floor
+        - z drawX
+bounceLoss:
+  copy vy vq
+  half vq
+  half vq                                            # vq := vy / 4
+  subn vq vy                                         # vy := vy - vy/4
+  - z drawX
+mvUp:   - ysteps drawX riseSt                        # rising
+riseSt: - y ceilHit riseOk                           #   at the ceiling (y==0)?  (rare) flip
+riseOk: + yr mvUp                                    #   y--, yr++
+ceilHit: + dy drawX                                  #   bonk: start falling
+drawX:
+  # drift x by 1 px, bouncing off the side walls (no energy loss), invariant xr = W-1-x
+  - dx mvXl mvXrd
+mvXrd:  + dx mvXr
+mvXr:   - xr flipXl goXr
+goXr:   + x draw
+flipXl: - dx draw draw
+mvXl:   - x flipXr goXl
+goXl:   + xr draw
+flipXr: + dx draw
+draw:
+  inc screen/clear
+  # floor: a 1 px green line across the bottom (y = H-1)
+  clear screen/x
+  copy screen/height screen/y
+  - screen/y fl1 fl1
+fl1: clear screen/color
+  addn 10 screen/color
+  copy screen/width screen/rectw
+  clear screen/recth
+  addn 1 screen/recth
+  inc screen/rect
+  # the ball: a 3x3 cyan square at (x, y)
+  copy x screen/x
+  copy y screen/y
+  clear screen/color
+  addn 14 screen/color
+  clear screen/rectw
+  addn 3 screen/rectw
+  clear screen/recth
+  addn 3 screen/recth
+  inc screen/rect
+  inc screen/flush
+  deb kbd/event frame quit
+quit:

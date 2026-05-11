@@ -1,0 +1,68 @@
+# A starfield: nine stars stream leftward at three speeds (a parallax depth cue
+# -- the slow ones are dim and far, the fast ones bright and near).  When a star
+# runs off the left edge it respawns at the right edge on a fresh random row.
+# Press any key to quit.  Works on the terminal renderer or, with `make sdl` /
+# `bccompile --sdl`, in a window.
+#
+# No per-star initialisation: every star register starts at 0, so on the first
+# frame `updstar` sees x == 0 and respawns it -- they all start at the right edge
+# with random rows, then disperse as the three speeds pull them apart.  And the
+# row needs no `mod H`: `screen/plot` already wraps its coordinates, so a random
+# byte in screen/y just lands somewhere on the screen.
+
+func clear X { - X done self }                     # X := 0
+
+func copy From To {                                # To := From   (From preserved)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                                    # R += N   (N is a value, consumed)
+  l: - N done
+  + R l
+}
+
+func subn N R {                                    # R := max(0, R - N)   (N consumed)
+  l: - N done
+  - R l l
+}
+
+func updstar SPD X Y {                             # one star: move left by SPD, respawn if off-edge, plot
+  subn SPD X                                       # X := max(0, X - SPD)
+  - X resp peekX                                   # X == 0 (ran off the left edge)?  respawn : keep
+peekX: + X drw                                     #   X > 0: undo the deb's decrement, just draw
+resp:  copy screen/width X                         #   X := W - 1   (back to the right edge)
+       subn 1 X
+       inc rand/next
+       copy rand/byte Y                            #   Y := random row  (screen/plot wraps it mod H)
+drw:   copy X screen/x
+       copy Y screen/y
+       inc screen/plot
+}
+
+# --- per frame ---
+frame:
+  inc screen/clear
+  clear screen/color
+  addn 240 screen/color                            # speed 1: dim, far
+  updstar 1 x1 y1
+  updstar 1 x2 y2
+  updstar 1 x3 y3
+  clear screen/color
+  addn 248 screen/color                            # speed 2: brighter
+  updstar 2 x4 y4
+  updstar 2 x5 y5
+  updstar 2 x6 y6
+  clear screen/color
+  addn 255 screen/color                            # speed 3: near, brightest
+  updstar 3 x7 y7
+  updstar 3 x8 y8
+  updstar 3 x9 y9
+  inc screen/flush
+  deb kbd/event frame quit
+quit:
