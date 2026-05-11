@@ -30,7 +30,7 @@ static void print_usage(const char *prog) {
         "  --emit-qbe          Output QBE intermediate language (for compilation)\n"
         "  --emit-urm          Output the program encoded for examples/urm.bc\n"
         "  -O, --optimize      Enable loop optimizations\n"
-        "  --show-opt          Print optimized IR\n"
+        "  --show-opt          Print the optimized IR (implies -O)\n"
         "  -h, --help          Show this help\n"
         "\n"
         "Register initialization:\n"
@@ -109,6 +109,7 @@ int main(int argc, char *argv[]) {
             break;
         case 'P':
             show_opt = true;
+            optimize = true;  // "the optimized IR" only differs from --show-ir once folding is on
             break;
         case 'h':
             print_usage(argv[0]);
