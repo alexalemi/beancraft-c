@@ -1,0 +1,78 @@
+# The "DVD" screensaver: the word DVD (in the built-in 8x8 font) drifts around
+# the screen and changes colour every time it bounces off a wall.  Will it ever
+# hit a corner?  Press any key to quit.  Works on the terminal renderer or, with
+# `make sdl` / `bccompile --sdl`, in a window.
+#
+# The logo is 24 px wide (three glyphs) and 8 px tall; lx,ly is its top-left
+# corner.  As in bounce2.bc the bounce needs no comparisons -- mirror coordinates
+# lxr = W-24-lx and lyr = H-8-ly are kept in sync with lx,ly, so "at the right
+# wall" is just `deb lxr` against zero.
+
+func clear X { - X done self }                     # X := 0
+
+func copy From To {                                # To := From   (From preserved)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                                    # R += N   (N is a value, consumed)
+  l: - N done
+  + R l
+}
+
+func subn N R {                                    # R := max(0, R - N)   (N consumed)
+  l: - N done
+  - R l l
+}
+
+# --- init: logo at (0,0), moving down-right; one colour to start ---
+copy screen/width lxr
+subn 24 lxr                                        # lxr := W - 24
+copy screen/height lyr
+subn 8 lyr                                         # lyr := H - 8
+addn 1 dirx                                        # dirx = 1: moving +x   (0: -x)
+addn 1 diry                                        # diry = 1: moving +y   (0: -y)
+addn 9 screen/color                                # start bright red
+
+# --- per frame ---
+frame:
+  # bounce x within [0, W-24] using dirx, invariant lxr = W-24-lx
+  - dirx mvLx mvRxd
+mvRxd:  + dirx mvRx                                 # dirx was 1: restore the peek
+mvRx:   - lxr hitRx goRx                            # at the right wall (lxr==0)? bounce : move
+goRx:   + lx updY                                  #   moved right: lx++
+hitRx:  - dirx bumpX bumpX                          #   hit right wall: dirx 1 -> 0
+mvLx:   - lx hitLx goLx                             # at the left wall (lx==0)? bounce : move
+goLx:   + lxr updY                                 #   moved left: lxr++
+hitLx:  + dirx bumpX                                #   hit left wall: dirx 0 -> 1
+bumpX:  inc screen/color                            #   changed x direction -> next colour
+        - z updY
+  # bounce y within [0, H-8] using diry, invariant lyr = H-8-ly
+updY:   - diry mvLy mvRyd
+mvRyd:  + diry mvRy
+mvRy:   - lyr hitRy goRy
+goRy:   + ly endF
+hitRy:  - diry bumpY bumpY
+mvLy:   - ly hitLy goLy
+goLy:   + lyr endF
+hitLy:  + diry bumpY
+bumpY:  inc screen/color
+        - z endF
+  # draw "DVD" at (lx, ly) -- the text stream advances screen/x by 8 each glyph
+endF:   inc screen/clear
+        copy lx screen/x
+        copy ly screen/y
+        addn 68 screen/glyph                        # 'D'
+        inc screen/text
+        addn 86 screen/glyph                        # 'V'
+        inc screen/text
+        addn 68 screen/glyph                        # 'D'
+        inc screen/text
+        inc screen/flush
+        deb kbd/event frame quit
+quit:
