@@ -42,11 +42,25 @@ $ make            # builds ./beancraft
 $ make test       # parser + bignum + optimizer unit tests (ASan/UBSan), then test/run_examples.sh
 $ make debug      # ./beancraft with -fsanitize=address,undefined
 $ make sdl        # ./beancraft with the SDL framebuffer backend  (run `make clean` when switching to/from this)
+$ make wasm       # web/beancraft.{mjs,wasm} — the interpreter as a WebAssembly module (needs Emscripten)
 $ make clean
 ```
 
 `make` and `make sdl` share `build/`, so run `make clean` before switching
 between them or you'll get SDL link errors from a stale object file.
+
+### Web playground
+
+`make wasm` (with [Emscripten](https://emscripten.org/) on `PATH`) compiles the
+interpreter — parser → IR → optimizer → interpreter, no QBE backend — to a
+WebAssembly module. `web/index.html` is a small demo page that loads it: pick an
+example or type your own counter-machine program, set register values, hit Run.
+WASM won't load over `file://`, so serve the repo over HTTP:
+
+```console
+$ make wasm && python3 -m http.server
+# then open http://localhost:8000/web/index.html
+```
 
 ## Run
 
@@ -135,9 +149,9 @@ src/                C sources               include/beancraft/   public headers
   lexer,parser,ast    front end             test/                unit + example tests
   loader              use/func expansion    scripts/bccompile    .bc -> native binary
   ir, opt             IR + optimizer        examples/            ~50 .bc programs
-  interp              tree-walking VM
-  qbe, qbe_runtime,   native backend +
-  qbe_driver          its C runtime
+  interp              tree-walking VM        web/wasm_main.c +    WebAssembly build
+  qbe, qbe_runtime,   native backend +          web/index.html      (`make wasm`) + demo page
+  qbe_driver          its C runtime          docs/                language / devices / architecture
   devices             I/O (console/screen/audio/...)
   bignum, arena, str  pointer-tagged bignums; bump allocator; interned strings
 ```

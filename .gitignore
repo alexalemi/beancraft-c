@@ -12,6 +12,10 @@ build/
 *.ssa
 *.s
 
+# WebAssembly build (run `make wasm` to produce these)
+web/beancraft.mjs
+web/beancraft.wasm
+
 # Editor/IDE
 .vscode/
 .idea/

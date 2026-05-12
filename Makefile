@@ -27,7 +27,7 @@ LIB_OBJS = $(filter-out $(BUILDDIR)/main.o,$(OBJS))
 
 TARGET = beancraft
 
-.PHONY: all clean debug test sdl
+.PHONY: all clean debug test sdl wasm
 
 all: $(BUILDDIR) $(TARGET)
 
@@ -63,7 +63,27 @@ $(BUILDDIR)/test_%: $(TESTDIR)/test_%.c $(LIB_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -I include -o $@ $^
 
 clean:
-	rm -rf $(BUILDDIR) $(TARGET) libbcruntime.a
+	rm -rf $(BUILDDIR) $(TARGET) libbcruntime.a web/beancraft.mjs web/beancraft.wasm
+
+# WebAssembly build of the interpreter (parser + IR + optimizer + interpreter +
+# devices -- no QBE backend, which shells out to qbe/cc). Needs Emscripten on
+# PATH (https://emscripten.org/). Produces web/beancraft.mjs + web/beancraft.wasm,
+# loaded by web/index.html. Serve the repo over HTTP (e.g. `python3 -m http.server`)
+# and open /web/index.html -- WASM won't load over file://.
+WASM_LIB = arena str lexer parser ast loader ir opt interp bignum error devices
+WASM_SRCS = $(WASM_LIB:%=$(SRCDIR)/%.c) web/wasm_main.c
+WASM_FLAGS = -O2 -I include \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createBeancraft \
+  -sEXIT_RUNTIME=0 -sINVOKE_RUN=0 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web \
+  -sEXPORTED_FUNCTIONS=_bc_run_source,_bc_free,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
+
+wasm:
+	@command -v emcc >/dev/null 2>&1 || { \
+	  echo "wasm: 'emcc' (Emscripten) not found on PATH -- see https://emscripten.org/docs/getting_started/downloads.html"; \
+	  exit 1; }
+	emcc $(WASM_SRCS) $(WASM_FLAGS) -o web/beancraft.mjs
+	@echo "Built web/beancraft.mjs (+ web/beancraft.wasm). Serve the repo over HTTP and open /web/index.html"
 
 # QBE runtime library for compiled programs: the bignum implementation, the
 # bc_* shims the generated code calls, and the device subsystem.

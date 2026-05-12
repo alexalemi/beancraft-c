@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>beancraft — counter-machine playground</title>
+<style>
+  :root {
+    --bg: #15171c; --panel: #1d2026; --line: #2d313a; --fg: #d7dae0; --dim: #8b919e;
+    --accent: #7fd8a8; --warn: #e6a86b; --err: #e8736b; --code: #cbd2e0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 2rem 1rem 4rem;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; font-weight: 650; }
+  h1 .tag { color: var(--accent); }
+  .lede { color: var(--dim); margin: 0 0 1.5rem; }
+  .lede a { color: var(--accent); }
+  .row { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; margin: .75rem 0; }
+  .row label { color: var(--dim); }
+  label small { color: var(--dim); font-weight: 400; }
+  select, input[type=text], input[type=number] {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: .4rem .6rem; font: inherit;
+  }
+  input[type=text] { flex: 1; min-width: 12ch; font-family: var(--mono); }
+  input[type=number] { width: 12ch; font-family: var(--mono); }
+  textarea {
+    width: 100%; min-height: 220px; resize: vertical; background: var(--panel);
+    color: var(--code); border: 1px solid var(--line); border-radius: 8px;
+    padding: .75rem 1rem; font: 13px/1.55 var(--mono); tab-size: 2;
+  }
+  button {
+    background: var(--accent); color: #10221a; border: 0; border-radius: 6px;
+    padding: .5rem 1.25rem; font: inherit; font-weight: 650; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+  .status { color: var(--dim); margin-left: .5rem; font-size: .9rem; }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  @media (max-width: 620px) { .panes { grid-template-columns: 1fr; } }
+  .pane h2 {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0 0 .35rem; font-weight: 600;
+  }
+  pre {
+    margin: 0; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: .75rem 1rem; font: 13px/1.5 var(--mono);
+    white-space: pre-wrap; word-break: break-all; min-height: 5rem; color: var(--code);
+  }
+  pre.err { color: var(--err); }
+  footer { color: var(--dim); margin-top: 2rem; font-size: .85rem; }
+  footer code { font-family: var(--mono); color: var(--code); }
+</style>
+</head>
+<body>
+<main>
+  <h1>beancraft <span class="tag">/ counter-machine playground</span></h1>
+  <p class="lede">
+    A <a href="https://en.wikipedia.org/wiki/Counter_machine">counter machine</a> — just
+    <em>increment</em> and <em>decrement-or-branch</em> — running in your browser via the
+    C interpreter compiled to WebAssembly. Pick an example or write your own; the optimizer
+    (<code>-O</code>) is on.
+  </p>
+
+  <div class="row">
+    <label for="example">Example:</label>
+    <select id="example"></select>
+  </div>
+
+  <textarea id="src" spellcheck="false"></textarea>
+
+  <div class="row">
+    <label for="args">Registers <small>(NAME=VALUE …)</small></label>
+    <input type="text" id="args" placeholder="A=7 B=8" autocomplete="off">
+    <label for="steps">Max steps</label>
+    <input type="number" id="steps" value="10000000" min="1" step="1000000">
+    <button id="run" disabled>Run</button>
+    <span class="status" id="status">loading WebAssembly…</span>
+  </div>
+
+  <div class="panes">
+    <div class="pane">
+      <h2>Output <small style="text-transform:none;letter-spacing:0">(con/emit)</small></h2>
+      <pre id="out">—</pre>
+    </div>
+    <div class="pane">
+      <h2>Result <small style="text-transform:none;letter-spacing:0">(final registers)</small></h2>
+      <pre id="result">—</pre>
+    </div>
+  </div>
+
+  <footer>
+    Built with <code>make wasm</code> (Emscripten). The QBE → native compiler in
+    beancraft can't run client-side, so this is the interpreter only — graphics demos
+    (<code>life.bc</code>, <code>pong.bc</code>, …) need the SDL build; see the README.
+  </footer>
+</main>
+
+<script type="module">
+import createBeancraft from './beancraft.mjs';
+
+// ---- a few example programs (source + sensible default register args) -------
+const EXAMPLES = {
+  "Add — Out = A + B": { args: "A=12 B=30", src: `# Out := A + B  (move A and B into Out, one decrement at a time)
+init:  - A copyB
+       + Out prev
+copyB: - B done
+       + Out prev
+` },
+  "Multiply — Out = A * B": { args: "A=7 B=8", src: `# Out := A * B  (add A to Out, B times)
+clrTmp: - tmp clrOut self
+clrOut: - Out loop self
+loop:   - B done
+addA:   - A restoreA
+        + Out
+        + tmp addA
+restoreA: - tmp loop
+        + A prev
+` },
+  "Fibonacci — Out = fib(N)": { args: "N=20", src: `# Out := the Nth Fibonacci number  (fib(0)=0, fib(1)=1)
+c1: - a c2 self
+c2: - b c3 self
+c3: - tmp setup self
+setup: + b loop
+loop:  - N result
+mvB:   - b mvA
+       + tmp mvB
+mvA:   - a mvT
+       + b mvA
+mvT:   - tmp loop
+       + a
+       + b mvT
+result: - a done
+        + Out prev
+` },
+  "Factorial — Out = N!": { args: "N=6", src: `# Out := N!  (counter walks N..1, multiplying Out each round)
+clr1: - prod clr2 self
+clr2: - k clr3 self
+clr3: - save clr4 self
+clr4: - counter clr5 self
+clr5: - Out setOne self
+setOne: + Out copyN
+copyN:  - N mainLoop
+        + counter copyN
+mainLoop: - counter result
+copyCnt:  - counter restoreCnt
+          + k
+          + save copyCnt
+restoreCnt: - save bumpK
+            + counter restoreCnt
+bumpK:  + k addLoop
+addLoop: - k clrOld
+addOut:  - Out contAdd
+         + prod
+         + save addOut
+contAdd: - save addLoop
+         + Out prev
+clrOld:  - Out moveProd self
+moveProd: - prod mainLoop
+          + Out prev
+result:
+` },
+  "GCD — Out = gcd(A, B)": { args: "A=48 B=18", src: `# Out := gcd(A, B)  (Euclidean subtraction)
+mainLoop: - A bResult
+          + A chkB
+chkB:     - B aResult
+          + B clrCnt
+clrCnt:   - cnt sub self
+sub:      - A aHitZero
+          - B bHitZero
+          + cnt sub
+aHitZero: - cnt mainLoop
+          + A prev
+bHitZero: + A fixB
+fixB:     - cnt mainLoop
+          + B prev
+aResult:  - A done
+          + Out prev
+bResult:  - B done
+          + Out prev
+` },
+  "IsEven — Even = (N % 2 == 0)": { args: "N=42", src: `# Even := 1 if N is even else 0  (flip Even once per decrement of N)
+clr: - Even setOne self
+setOne: + Even loop
+loop:   - N result
+        - Even setOne loop
+result:
+` },
+  "Hello — print \"Hi\"": { args: "", src: `# print "Hi\\n" via the console device
+func addn N R {        # R += N
+  loop: - N done
+  + R loop
+}
+addn 72 con/byte       # 'H'
+inc con/emit
+addn 105 con/byte      # 'i'
+inc con/emit
+addn 10 con/byte       # '\\n'
+inc con/emit
+` },
+};
+
+const $ = (id) => document.getElementById(id);
+const exampleSel = $("example"), srcEl = $("src"), argsEl = $("args"),
+      stepsEl = $("steps"), runBtn = $("run"), statusEl = $("status"),
+      outEl = $("out"), resEl = $("result");
+
+for (const name of Object.keys(EXAMPLES)) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name;
+  exampleSel.appendChild(o);
+}
+function loadExample(name) {
+  const ex = EXAMPLES[name];
+  srcEl.value = ex.src;
+  argsEl.value = ex.args;
+}
+exampleSel.addEventListener("change", () => loadExample(exampleSel.value));
+loadExample(exampleSel.value);
+
+// ---- instantiate the WASM module ------------------------------------------
+let stdoutBuf = "";
+const Module = await createBeancraft({
+  print:    (s) => { stdoutBuf += s + "\n"; },
+  printErr: (s) => { stdoutBuf += s + "\n"; console.warn("[beancraft]", s); },
+});
+const bc_run_source = Module.cwrap("bc_run_source", "number", ["string", "string", "number"]);
+const bc_free       = Module.cwrap("bc_free", null, ["number"]);
+
+statusEl.textContent = "ready";
+runBtn.disabled = false;
+
+function run() {
+  runBtn.disabled = true;
+  statusEl.textContent = "running…";
+  outEl.classList.remove("err"); resEl.classList.remove("err");
+  outEl.textContent = ""; resEl.textContent = "";
+  // defer one tick so the UI updates before the (synchronous) run blocks the thread
+  setTimeout(() => {
+    stdoutBuf = "";
+    const src = srcEl.value, args = argsEl.value.trim();
+    const maxSteps = Math.max(1, Math.floor(Number(stepsEl.value) || 0)) | 0;
+    const t0 = performance.now();
+    let result = "";
+    const ptr = bc_run_source(src, args, maxSteps);
+    try { result = Module.UTF8ToString(ptr); } finally { if (ptr) bc_free(ptr); }
+    const ms = (performance.now() - t0).toFixed(1);
+
+    outEl.textContent = stdoutBuf || "(no console output)";
+    resEl.textContent = result || "(no registers)";
+    if (result.startsWith("error:")) resEl.classList.add("err");
+    statusEl.textContent = `done in ${ms} ms`;
+    runBtn.disabled = false;
+  }, 0);
+}
+runBtn.addEventListener("click", run);
+// Ctrl/Cmd+Enter from the textarea runs.
+srcEl.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+});
+</script>
+</body>
+</html>
