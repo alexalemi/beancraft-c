@@ -8,27 +8,7 @@
 # lxr = W-24-lx and lyr = H-8-ly are kept in sync with lx,ly, so "at the right
 # wall" is just `deb lxr` against zero.
 
-func clear X { - X done self }                     # X := 0
-
-func copy From To {                                # To := From   (From preserved)
-  - tmp clrTo self
-  clrTo: - To loop self
-  loop:  - From restore
-         + To
-         + tmp loop
-  restore: - tmp done
-           + From restore
-}
-
-func addn N R {                                    # R += N   (N is a value, consumed)
-  l: - N done
-  + R l
-}
-
-func subn N R {                                    # R := max(0, R - N)   (N consumed)
-  l: - N done
-  - R l l
-}
+use "std"                                          # clear, copy, addn, subn
 
 # --- init: logo at (0,0), moving down-right; one colour to start ---
 copy screen/width lxr

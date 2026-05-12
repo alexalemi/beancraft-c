@@ -5,52 +5,9 @@
 #
 # Showcases the Random device (`inc rand/next` -> `rand/byte`) and the
 # divide-by-constant optimisation -- the midpoint step is x := (x + vx) / 2, and
-# `half` below is exactly the loop the optimiser folds into one divmod.
+# `half` in the standard library is exactly the loop the optimiser folds into one divmod.
 
-func clear X { - X done self }                    # X := 0
-
-func copy From To {                                # To := From   (From preserved; tmp private)
-  - tmp clrTo self
-  clrTo: - To loop self
-  loop:  - From restore
-         + To
-         + tmp loop
-  restore: - tmp done
-           + From restore
-}
-
-func addn N R {                                    # R += N   (N is a value, consumed)
-  l: - N done
-  + R l
-}
-
-func addr From To {                                # To += From   (From preserved; tmp private)
-  - tmp loop self
-  loop:  - From restore
-         + To
-         + tmp loop
-  restore: - tmp done
-           + From restore
-}
-
-func half X {                                      # X := floor(X / 2)   (q private)
-  - q qz self                                      # q := 0
-  qz: - X mv q1                                    # X==0 -> done; X>0 -> X-- -> q1
-  q1: - X mv q2                                    # X==0 -> done (odd: floor); X>0 -> X-- -> q2
-  q2: + q qz                                       # q++ -> loop
-  mv: - q done qm                                  # move q back into X
-  qm: + X mv
-}
-
-func mod3 R {                                      # R := R mod 3
-  m0: - R done m1                                  # R==0 -> 0 mod 3 == 0
-  m1: - R e1 m2                                    # R was 1
-  m2: - R e2 m3                                    # R was 2
-  m3: - z m0                                       # R >= 3: subtracted 3, loop
-  e1: + R done
-  e2: + R e2b
-  e2b: + R done
-}
+use "std"                                          # clear, copy, addn, addr, half, mod3
 
 # --- the triangle's three corners ---
 # V0 = (W/2, 0)   top centre

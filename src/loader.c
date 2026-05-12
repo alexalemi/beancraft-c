@@ -344,6 +344,7 @@ static void expand_module_body(LoaderContext *ctx, Ast *dest,
 
     uint32_t first_cloned = dest->node_count;
     for (uint32_t i = 0; i < body_count; i++) {
+        if (body[i].kind == AST_FUNCDEF) continue;  // registered by the caller (expand_use), not inlined
         clone_and_transform_node(dest, &body[i], &ic);
     }
 
@@ -383,6 +384,17 @@ static BcResult expand_use(LoaderContext *ctx, Ast *dest,
         return load_result;
     }
     Ast *module_ast = load_result.value;
+
+    // A `use`d module may export `func` definitions; register them so the
+    // caller (and anything it pulls in) can call them. They are not inlined.
+    for (uint32_t i = 0; i < module_ast->node_count; i++) {
+        if (module_ast->nodes[i].kind != AST_FUNCDEF) continue;
+        FuncEntry *e = arena_alloc(ctx->arena, sizeof(FuncEntry));
+        e->name = module_ast->nodes[i].funcdef.name;
+        e->def = &module_ast->nodes[i];
+        e->next = ctx->funcs;
+        ctx->funcs = e;
+    }
 
     char scope_buf[64];
     if (use_node->use.scope) {

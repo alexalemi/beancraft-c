@@ -11,38 +11,7 @@
 # and writes bit 1; phase 2 shifts bit 1 down into bit 0 (colour := colour / 2).
 # `screen/sample` reads a pixel's colour back, which is the whole point.
 
-func clear X { - X done self }                     # X := 0
-
-func copy From To {                                # To := From   (From preserved)
-  - tmp clrTo self
-  clrTo: - To loop self
-  loop:  - From restore
-         + To
-         + tmp loop
-  restore: - tmp done
-           + From restore
-}
-
-func addn N R {                                    # R += N   (N is a value, consumed)
-  l: - N done
-  + R l
-}
-
-func half X {                                      # X := floor(X / 2)
-  - q qz self
-  qz: - X mv q1
-  q1: - X mv q2
-  q2: + q qz
-  mv: - q done qm
-  qm: + X mv
-}
-
-func bit0 N R {                                    # R := N & 1   (N consumed)
-  - R r0 self
-  r0: - N done dec1                                # N==0: even, R stays 0
-  dec1: - N r1 r0                                  # N==0: odd!  ;  else N-- -> loop
-  r1: + R
-}
+use "std"                                          # clear, copy, addn, half, bit0
 
 func cell PX PY {                                  # paint cell (PX, PY) alive (colour 1)
   copy PX screen/x
