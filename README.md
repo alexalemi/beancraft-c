@@ -64,13 +64,14 @@ $ ./beancraft [options] file.bc [REG=VALUE ...]
 | `-O, --optimize` | enable the loop-folding optimizer (see below) |
 | `--show-ast` / `--show-ir` / `--show-opt` | dump the AST / IR / optimized IR, then run (use `-n` to just dump) |
 | `--emit-qbe` | emit QBE IL to stdout, then exit (combine with `-O`) |
-| `--emit-urm` | emit the program encoded for `examples/urm.bc`, then exit |
+| `--emit-urm` | emit the program (and registers) Gödel-encoded for `examples/urm.bc`, then exit |
 
-`REG=VALUE` arguments set a register's initial value before the run; when the
-program halts, every named register's final value is printed under a `Results:`
-header — *except* for programs that use an I/O device, which print just their
-output (a register dump would clobber it). `--quiet` suppresses the dump;
-`--verbose` adds step counts and forces it on.
+`REG=VALUE` arguments set a register's initial value before the run (the value
+may be an arbitrary-precision integer — e.g. the huge numbers from `--emit-urm`);
+when the program halts, every named register's final value is printed under a
+`Results:` header — *except* for programs that use an I/O device, which print
+just their output (a register dump would clobber it). `--quiet` suppresses the
+dump; `--verbose` adds step counts and forces it on.
 
 ### Compiling to a native binary
 
@@ -96,9 +97,10 @@ handful of loop idioms and folds each into one O(1) bignum operation:
 - **MULADD** — the two-transfer multiply loop ⟶ `Dᵢ += C·S + (C−1)·T; S += T; T,C := 0`
 
 Both the interpreter and the QBE backend use the folded form, so `-O` speeds up
-interpretation as well as compilation. `examples/urm.bc` (a universal counter
-machine that runs another beancraft program supplied as a [Gödel-style](https://en.wikipedia.org/wiki/G%C3%B6del_numbering)
-number) is unusable without it and instant with it.
+interpretation as well as compilation. `examples/urm.bc` (a universal register
+machine that runs another beancraft program — and its registers — supplied as a
+[Gödel-style](https://en.wikipedia.org/wiki/G%C3%B6del_numbering) number) is
+unusable without it and merely-slow with it.
 
 ## Examples
 
@@ -106,7 +108,8 @@ number) is unusable without it and instant with it.
 `factorial`, `fib`, `gcd`), predicates (`iseven`, `iszero`), text (`hello`,
 `cat`, `clock`, `dayOfWeek`), graphics demos (`life`, `langton`, `sierpinski`,
 `stars`, `gravity`, `dvd`, `bounce`, `paint`, `pong`), a chiptune (`chime`),
-the standard library (`std.bc`), and the universal machine (`urm.bc`).
+the standard library (`std.bc`), and the universal machine (`urm.bc` — it runs
+any beancraft program supplied as one Gödel number; see `--emit-urm`).
 
 ```console
 $ ./beancraft examples/factorial.bc N=10 -O | grep Out

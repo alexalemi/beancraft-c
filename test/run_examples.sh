@@ -148,6 +148,15 @@ check "pow -O: 10^5 = 100000" "Out=100000" examples/pow.bc -O Base=10 Exp=5
 check "fib -O: fib(20) = 6765" "Out=6765" examples/fib.bc -O N=20
 check "gcd -O: gcd(48,18) = 6" "Out=6" examples/gcd.bc -O A=48 B=18
 
+# --- urm.bc: the universal register machine (run a few small programs through it) ---
+echo
+echo -e "${YELLOW}=== urm.bc (Gödel-encoded universal machine; out_k = simulated s_k) ===${NC}"
+check "urm: iseven N=4 -> Even(s0)=1" "out0=1" examples/urm.bc -O $("$BC" --emit-urm examples/iseven.bc N=4 | tail -1)
+check "urm: iseven N=7 -> Even(s0)=0" "out0=0" examples/urm.bc -O $("$BC" --emit-urm examples/iseven.bc N=7 | tail -1)
+check "urm: iszero N=0 -> Zero(s0)=1" "out0=1" examples/urm.bc -O $("$BC" --emit-urm examples/iszero.bc N=0 | tail -1)
+check "urm: add A=10 B=5 -> Out(s1)=15" "out1=15" examples/urm.bc -O $("$BC" --emit-urm examples/add.bc A=10 B=5 | tail -1)
+check "urm: mul A=2 B=3 -> Out(s1)=6" "out1=6" examples/urm.bc -O $("$BC" --emit-urm examples/mul.bc A=2 B=3 | tail -1)
+
 # --- Compiled (-O) path: only if qbe + the bccompile script are available ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ_DIR="$(dirname "$SCRIPT_DIR")"

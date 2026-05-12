@@ -1,181 +1,167 @@
-# A universal counter machine that runs a program GIVEN AS DATA.
+# urm.bc -- a universal register machine that runs another beancraft program
+# given as data.
 #
-# Simulated machine: 4 registers s0..s3.  Program = a list of instructions, each
-# encoded as four list elements (t, r, g1, g2):
-#   t = 0 : inc s_r ;  PC := g1
-#   t = 1 : if s_r == 0 then PC := g1  else  ( s_r-- ; PC := g2 )
-#   t = 2 : halt
-# The list is the pairing encoding (push x onto L  ==  L := 2^x*(2L+1)).
+# Both the program AND the simulated registers are each a single Gödel-encoded
+# integer, so this runs ANY beancraft program with any number of registers and
+# any number of instructions.  The register list is grown on demand and indexed
+# by walking it, so it's slow -- every simulated `inc`/`deb` walks the list, and
+# the encoded numbers are astronomical -- fine for toy inputs, glacial for
+# anything real.  Run it with `-O`: every list pop/push folds to an O(1) bignum
+# op, but without `-O` a single pop is exponential in the encoded number's bit
+# length and you'll blow the step limit immediately.
 #
-# The program is supplied in the registers i0..i63 -- 16 instructions, four
-# fields each -- so this URM can run anything that fits in 16 instructions and
-# 4 registers.  `beancraft --emit-urm file.bc` produces the i0=.. i1=.. ...
-# encoding of a beancraft program (and tells you which register maps to which
-# s_k).  Then:   beancraft examples/urm.bc s0=.. <encoding>   runs it.
+# Encoding (lists via the pairing code; a flat 4-element instruction format):
+#   pair(x, y) = 2^x * (2y + 1)        -- always >= 1, so 0 unambiguously means []
+#   list([])   = 0 ;  list(h :: t) = pair(h, list(t))
+#   an instruction is FOUR consecutive list elements (t, r, g1, g2):
+#       t = 0 : inc s_r ;  PC := g1
+#       t = 1 : if s_r == 0 then PC := g1 else ( s_r-- ; PC := g2 )
+#       t = 2 : halt
+#   program   P = list([ t0, r0, g1_0, g2_0,  t1, r1, g1_1, g2_1,  ... ])
+#   registers R = list([ v0, v1, v2, ... ])     (a missing tail means zeros)
+#   the program counter PC starts at 0.
 #
-# Every list operation (push/pop/copy) folds to O(1) ops under `-O`; without it
-# a single pop of the program list is exponential in its bit-length and the
-# program overflows the step limit.
+# Get the encoding with:  beancraft --emit-urm file.bc [REG=VALUE...]
+#   -- it prints `P=...` (and `R=...` when you give initial register values).
+# Then run it:
+#   beancraft examples/urm.bc -O P=<prog> R=<regs>
+# At halt the first eight simulated registers are unpacked into out0..out7 so the
+# result is readable; the machine itself handles arbitrarily many.
 
-func clear X {
-    - X done self
+# `done` / `halt` / `end` inside a `func` body mean "return to the caller".
+
+func clear X { - X done self }
+
+func copy From To {                        # To := From   (From preserved; private tmp)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
 }
 
-# non-destructive copy:  To := From,  From left unchanged.  (tmp is private.)
-func copy From To {
-    - tmp clrTo self
-    clrTo: - To loop self
-    loop:  - From restore
-           + To
-           + tmp loop
-    restore: - tmp done
-             + From restore
+func push X L {                            # L := 2^X * (2L + 1)   (X consumed)
+  - Z setOne self
+  setOne: + Z dblL
+  dblL:  - L moveZ
+         + Z
+         + Z dblL
+  moveZ: - Z afterDbl
+         + L moveZ
+  afterDbl: - X done dblX
+  dblX:  - L moveZ2
+         + Z
+         + Z dblX
+  moveZ2: - Z afterDbl
+          + L moveZ2
 }
 
-# push X onto list L (X consumed):  L := 2^X * (2*L + 1)
-func push X L {
-    - Z setOne self
-    setOne: + Z dblL
-    dblL:  - L moveZ
-           + Z
-           + Z dblL
-    moveZ: - Z afterDbl
-           + L moveZ
-    afterDbl: - X done dblX
-    dblX:  - L moveZ2
-           + Z
-           + Z dblX
-    moveZ2: - Z afterDbl
-            + L moveZ2
+func pop L X got {                         # head of list L -> X (the pair's exponent);
+  - X clrG self                            # L := the pair's second component.  [] -> X=0, got=0
+  clrG: - got chk self
+  chk:  - L empty
+  peek: + L peel
+  empty: end
+  peel:  - L wasEven
+         - L wasOdd
+         + Z peel
+  wasEven: - Z bumpX
+           + L wasEven
+  bumpX: + X peel
+  wasOdd:  - Z setG
+           + L wasOdd
+  setG: + got done
 }
 
-# pop the head of list L into X, setting got := 1.  Empty list -> X = 0, got = 0.
-func pop L X got {
-    - X clrG self
-    clrG: - got chk self
-    chk:  - L empty
-    peek: + L peel
-    empty: end
-    peel:  - L wasEven
-           - L wasOdd
-           + Z peel
-    wasEven: - Z bumpX
-             + L wasEven
-    bumpX: + X peel
-    wasOdd:  - Z setG
-             + L wasOdd
-    setG: + got done
+# R := the register list with element I incremented (extended with zeros if
+# I >= length R).  I is consumed; B/tv/V/x/gv/gv2/gx are private scratch.
+func incReg I R {
+  walk:  - I atTgt
+         pop R tv gv
+         push tv B
+         - z walk
+  atTgt: pop R V gv2
+         + V
+         push V R
+  drain: pop B x gx
+         - gx done back                     # B drained -> return
+  back:  push x R
+         - z drain
 }
 
-# --- build the program list P from i63, i62, ..., i0  (so i0 ends up on top) ---
-clear P
-clear PC
-push i63 P
-push i62 P
-push i61 P
-push i60 P
-push i59 P
-push i58 P
-push i57 P
-push i56 P
-push i55 P
-push i54 P
-push i53 P
-push i52 P
-push i51 P
-push i50 P
-push i49 P
-push i48 P
-push i47 P
-push i46 P
-push i45 P
-push i44 P
-push i43 P
-push i42 P
-push i41 P
-push i40 P
-push i39 P
-push i38 P
-push i37 P
-push i36 P
-push i35 P
-push i34 P
-push i33 P
-push i32 P
-push i31 P
-push i30 P
-push i29 P
-push i28 P
-push i27 P
-push i26 P
-push i25 P
-push i24 P
-push i23 P
-push i22 P
-push i21 P
-push i20 P
-push i19 P
-push i18 P
-push i17 P
-push i16 P
-push i15 P
-push i14 P
-push i13 P
-push i12 P
-push i11 P
-push i10 P
-push i9 P
-push i8 P
-push i7 P
-push i6 P
-push i5 P
-push i4 P
-push i3 P
-push i2 P
-push i1 P
-push i0 P
+# If R[I] > 0: decrement it and set wasNZ := 1.  Otherwise wasNZ := 0 (R unchanged
+# except, harmlessly, extended with zeros if I >= length R).  I consumed.
+func decReg I R wasNZ {
+  - wasNZ walk self                          # wasNZ := 0
+  walk:  - I atTgt
+         pop R tv gv
+         push tv B
+         - z walk
+  atTgt: pop R V gv2
+         - V vz vp                            # R[I] == 0 -> vz ;  R[I] > 0 -> V--, vp
+  vz:    push V R                              # push the still-0 value back
+         - z drain
+  vp:    + wasNZ                               # R[I] was > 0; V is now R[I] - 1
+         push V R
+         - z drain
+  drain: pop B x gx
+         - gx done back                       # B drained -> return
+  back:  push x R
+         - z drain
+}
 
-# --- fetch / decode / execute loop ---
-step: copy P Q                   # Q := a fresh, readable copy of the program
-copy PC pcb                      # pcb := PC  (PC kept; pcb consumed below)
-clear skip
-mul4: - pcb skipLoop             # skip := 4 * PC
-      + skip
-      + skip
-      + skip
-      + skip mul4
-skipLoop: - skip readInst        # discard the first `skip` elements of Q
-pop Q discardV discardF
-- zer0 skipLoop                  # goto skipLoop  (zer0 is never written -> always 0)
+# ===========================================================================
+# main fetch / decode / execute loop
+# ===========================================================================
 
-readInst: pop Q t gott           # read the current instruction (t, r, g1, g2)
-pop Q r gotr
-pop Q g1 gotg1
-pop Q g2 gotg2
+step: copy P Pw                            # Pw := a fresh, consumable copy of the program
+      copy PC PCw                           # PCw := PC  (PC kept; the executed instruction overwrites it)
 
-- t isInc                        # decode t:  0 -> isInc,  1 -> isDeb,  2+ -> halt
-- t isDeb
-isHalt: end
+      # discard 4*PC list elements of Pw, leaving its head at instruction PC
+      clear sk
+      mk4:   - PCw doSkip
+             + sk
+             + sk
+             + sk
+             + sk mk4
+      doSkip: - sk getInst
+              pop Pw dv dg
+              - z doSkip
 
-isInc: - r incS0                 # inc s_r ; PC := g1
-       - r incS1
-       - r incS2
-incS3: + s3 setPC1
-incS0: + s0 setPC1
-incS1: + s1 setPC1
-incS2: + s2 setPC1
+      getInst: pop Pw t tg                  # read fields (t, r, g1, g2) of instruction PC
+      - tg progEnd haveInst                 # tg == 0: walked past the end of the program -> halt
+      progEnd: - z finish
+      haveInst: pop Pw r rg
+      pop Pw g1 g1g
+      pop Pw g2 g2g
 
-isDeb: - r debS0                 # if s_r == 0: PC := g1  else: s_r-- ; PC := g2
-       - r debS1
-       - r debS2
-debS3: - s3 setPC1 setPC2
-debS0: - s0 setPC1 setPC2
-debS1: - s1 setPC1 setPC2
-debS2: - s2 setPC1 setPC2
+      - t isInc                             # t == 0 -> inc
+      - t isDeb                             # t == 1 -> deb
+      - z finish                            # t >= 2 -> halt
 
-setPC1: clear PC                 # PC := g1
-movG1:  - g1 step
-        + PC movG1
-setPC2: clear PC                 # PC := g2
-movG2:  - g2 step
-        + PC movG2
+isInc:  incReg r R                          # s_r := s_r + 1 ;  PC := g1
+        clear PC
+        mp1:  - g1 step
+              + PC mp1
+
+isDeb:  decReg r R wn                       # if s_r == 0: PC := g1 ;  else: s_r-- ; PC := g2
+        - wn dZero dNZ
+  dZero: clear PC
+         mz1:  - g1 step
+               + PC mz1
+  dNZ:   clear PC
+         mz2:  - g2 step
+               + PC mz2
+
+# unpack the first eight simulated registers so the result prints readably
+finish: pop R out0 fg0
+        pop R out1 fg1
+        pop R out2 fg2
+        pop R out3 fg3
+        pop R out4 fg4
+        pop R out5 fg5
+        pop R out6 fg6
+        pop R out7 fg7
+        end

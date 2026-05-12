@@ -16,6 +16,7 @@ extern const char *bc_reg_names[];
 
 // Provided by the runtime
 extern void bc_init_reg(uint64_t *reg, uint64_t value);
+extern void bc_init_reg_str(uint64_t *reg, const char *s);
 extern char *bc_bignum_to_string(uint64_t reg);
 extern bool device_init(const char **reg_names, uint32_t reg_count, uint64_t *regs);
 extern void device_shutdown(void);
@@ -70,7 +71,7 @@ int main(int argc, char *argv[]) {
 
         *eq = '\0';
         const char *reg_name = arg;
-        uint64_t value = (uint64_t)strtoull(eq + 1, NULL, 10);
+        const char *value_str = eq + 1;
 
         // Try to find by name first, then as a numeric index.
         int64_t idx = find_reg(reg_name, reg_count);
@@ -83,9 +84,11 @@ int main(int argc, char *argv[]) {
         }
 
         if (idx >= 0) {
-            bc_init_reg(&bc_regs[idx], value);
+            bc_init_reg_str(&bc_regs[idx], value_str);   // arbitrary precision
             if (verbose) {
-                printf("Set %s = %lu\n", bc_reg_names[idx], value);
+                char *vs = bc_bignum_to_string(bc_regs[idx]);
+                printf("Set %s = %s\n", bc_reg_names[idx], vs);
+                free(vs);
             }
         } else {
             fprintf(stderr, "Warning: unknown register '%s'\n", reg_name);

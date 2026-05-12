@@ -269,14 +269,15 @@ $ ./beancraft file.bc [REG=VALUE ...] [options]
 - `-v` — also print steps executed and elapsed time.
 - `--emit-qbe` (+ `-O`) — emit [QBE](https://c9x.me/compile/) IL; `scripts/bccompile`
   wraps `beancraft --emit-qbe | qbe | cc` into one command.
-- `--emit-urm` — print the program re-encoded as data for `examples/urm.bc` (a
-  universal counter machine; see below).
+- `--emit-urm` — print the program (and, if you pass `REG=VALUE` args, the
+  initial registers) Gödel-encoded for `examples/urm.bc` (the universal machine;
+  see below).
 
-## The URM encoding
+## The universal register machine
 
-`examples/urm.bc` is a universal counter machine: it runs *another* beancraft
-program supplied as data. The simulated machine has four registers `s0..s3` and
-up to 16 instructions; each instruction is four numbers `(t, r, g1, g2)`:
+`examples/urm.bc` is a universal register machine: it runs *another* beancraft
+program supplied as data. The simulated machine has a `t = 0/1/2`-tagged
+instruction set and any number of registers `s0, s1, …`:
 
 | `t` | meaning |
 | --- | --- |
@@ -284,21 +285,43 @@ up to 16 instructions; each instruction is four numbers `(t, r, g1, g2)`:
 | `1` | `if s_r == 0 then PC := g1 else (s_r--; PC := g2)` |
 | `2` | halt |
 
-The 16 instructions × 4 fields are passed in registers `i0 … i63`, and the
-whole instruction *list* is held as a single integer via the pairing encoding
-`push x onto L  ≡  L := 2^x · (2L + 1)`. Producing and consuming that number is
-all `inc`/`deb` loops — which is why `urm.bc` is exponential-time without `-O`
-and instant with it (every list op folds to O(1)).
+Both the simulated **program** and its **registers** are passed as single
+integers, Gödel-encoded with the pairing code:
+
+- `pair(x, y) = 2^x · (2y + 1)` — always ≥ 1, so `0` unambiguously means the
+  empty list;
+- `list([]) = 0`, `list(h :: t) = pair(h, list(t))`;
+- the program is `list([t0, r0, g1_0, g2_0, t1, r1, g1_1, g2_1, …])` — four list
+  elements per instruction;
+- the registers are `list([v0, v1, v2, …])` (a missing tail is treated as zeros).
+
+So there's no fixed register count or instruction count: register `r` is "the
+`r`-th element of the register integer," and `urm.bc` accesses it by walking the
+list (pop `r` elements onto a scratch stack, touch element `r`, push them back).
+Building and walking those numbers is all `inc`/`deb` loops — so `urm.bc` is
+exponential-time without `-O` (a single list pop is exponential in the encoded
+number's bit length) and merely *very slow* with it (every list op folds to an
+O(1) bignum op, but each simulated `inc`/`deb` still walks the register list).
+
+`beancraft --emit-urm file.bc [REG=VALUE...]` prints the encoding — `P=…` (the
+program) and, if you pass register values, `R=…` (the initial registers).
+Registers map in order to `s0, s1, …`. At halt `urm.bc` unpacks the first eight
+simulated registers into `out0..out7` so the result is readable:
 
 ```console
-$ ./beancraft --emit-urm examples/iseven.bc
+$ ./beancraft --emit-urm examples/iseven.bc N=7
 # examples/iseven.bc -> urm.bc encoding.  registers: Even=s0 N=s1 :nil=s2
-i0=1 i1=0 i2=1 i3=0 i4=0 i5=0 i6=2 i7=0 i8=1 i9=1 i10=4 i11=3 ...
+P=68125900126858486 R=769
 
-# run iseven on N=7 via the universal machine (N maps to s1 here):
-$ ./beancraft examples/urm.bc -O s1=7  $(./beancraft --emit-urm examples/iseven.bc | tail -1)
-# ... leaves Even (= s0) = 0
+$ ./beancraft examples/urm.bc -O $(./beancraft --emit-urm examples/iseven.bc N=7 | tail -1)
+out0 = 0     # Even  (7 is odd)
+out1 = 0     # N     (consumed)
+...
+
+$ ./beancraft examples/urm.bc -O $(./beancraft --emit-urm examples/mul.bc A=2 B=3 | tail -1)
+out0 = 0     # tmp
+out1 = 6     # Out  (= 2 * 3)
+out2 = 0     # B
+out3 = 2     # A
+...
 ```
-
-(`-O` is essential: every list push/pop in `urm.bc` folds to an O(1) op, but
-without it a single pop is exponential in the encoded program's bit-length.)

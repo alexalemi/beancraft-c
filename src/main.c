@@ -15,6 +15,31 @@
 #include <getopt.h>
 #include <libgen.h>
 
+// --- Gödel-encoding helpers (used only by --emit-urm) ----------------------
+// pair(x, y) = 2^x * (2y + 1);  list([]) = 0;  list(h :: t) = pair(h, list(t)).
+
+static Bignum bn_pow2(uint64_t e) {           // 2^e  (e is small in practice)
+    Bignum r = bignum_from_u64(1);
+    for (uint64_t i = 0; i < e; i++) {
+        Bignum d = bignum_add(r, r);
+        bignum_free(&r);
+        r = d;
+    }
+    return r;
+}
+
+static Bignum bn_cons(uint64_t head, Bignum tail) {   // pair(head, tail); consumes `tail`
+    Bignum two_t   = bignum_add(tail, tail);
+    Bignum two_t_1 = bignum_add(two_t, bignum_from_u64(1));
+    Bignum p2      = bn_pow2(head);
+    Bignum out     = bignum_mul(p2, two_t_1);
+    bignum_free(&two_t);
+    bignum_free(&two_t_1);
+    bignum_free(&p2);
+    bignum_free(&tail);
+    return out;
+}
+
 static void print_usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [options] <file.bc> [REG=VALUE...]\n"
@@ -28,7 +53,7 @@ static void print_usage(const char *prog) {
         "  --show-ir           Print intermediate representation\n"
         "  --show-ast          Print abstract syntax tree\n"
         "  --emit-qbe          Output QBE intermediate language (for compilation)\n"
-        "  --emit-urm          Output the program encoded for examples/urm.bc\n"
+        "  --emit-urm          Output the program (and registers) Gödel-encoded for examples/urm.bc\n"
         "  -O, --optimize      Enable loop optimizations\n"
         "  --show-opt          Print the optimized IR (implies -O)\n"
         "  -h, --help          Show this help\n"
@@ -180,41 +205,56 @@ int main(int argc, char *argv[]) {
     }
 
     if (emit_urm) {
-        // Encode the program for examples/urm.bc: four list elements per
-        // instruction -- (t, r, g1, g2) -- printed as i0=.. i1=.. ...
-        //   t=0: inc s_r; PC := g1     t=1: deb s_r (jz -> g1, nz -> g2)     t=2: halt
-        // Registers map in order to s0, s1, ...; the URM has s0..s3 and room
-        // for 16 instructions.
-        if (prog->reg_count > 4) {
-            fprintf(stderr,
-                "Error: program uses %u registers; the urm.bc encoding supports at most 4\n",
-                prog->reg_count);
-            arena_free(arena);
-            return 1;
-        }
-        if (prog->inst_count > 16) {
-            fprintf(stderr,
-                "Error: program has %u instructions; the urm.bc encoding supports at most 16\n",
-                prog->inst_count);
-            arena_free(arena);
-            return 1;
-        }
-        printf("# %s -> urm.bc encoding.  registers:", filename);
-        for (uint32_t i = 0; i < prog->reg_count; i++) {
-            printf(" %s=s%u", prog->reg_names[i]->data, i);
-        }
-        printf("\n");
-        for (uint32_t i = 0; i < prog->inst_count; i++) {
+        // Gödel-encode the program (and the initial registers, if any REG=VALUE
+        // args are given) for examples/urm.bc. No size limits -- any number of
+        // registers, any number of instructions. An instruction is four list
+        // elements (t, r, g1, g2): t=0 inc s_r; t=1 deb s_r (jz->g1, nz->g2);
+        // t=2 halt. Registers map in order to s0, s1, ...
+        Bignum P = bignum_from_u64(0);
+        for (int i = (int)prog->inst_count - 1; i >= 0; i--) {
             const IrInst *in = &prog->insts[i];
-            uint32_t t, r, g1, g2;
+            uint64_t t, r, g1, g2;
             switch (in->op) {
             case IR_INC: t = 0; r = in->reg; g1 = in->arg_a; g2 = 0;          break;
             case IR_DEB: t = 1; r = in->reg; g1 = in->arg_a; g2 = in->arg_b;  break;
             case IR_END:
             default:     t = 2; r = 0;       g1 = 0;          g2 = 0;          break;
             }
-            printf("%si%u=%u i%u=%u i%u=%u i%u=%u",
-                   i ? " " : "", 4 * i, t, 4 * i + 1, r, 4 * i + 2, g1, 4 * i + 3, g2);
+            uint64_t f[4] = { t, r, g1, g2 };
+            for (int k = 3; k >= 0; k--) P = bn_cons(f[k], P);
+        }
+
+        uint64_t *rv = arena_alloc_zero(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(uint64_t));
+        bool any_reg = false;
+        for (uint32_t i = 0; i < prog->reg_count; i++) {
+            rv[i] = prog->reg_init[i];
+            if (rv[i]) any_reg = true;
+        }
+        for (int i = optind + 1; i < argc; i++) {
+            char *eq = strchr(argv[i], '=');
+            if (!eq) continue;
+            *eq = '\0';
+            int32_t idx = ir_find_reg(prog, argv[i]);
+            if (idx >= 0) { rv[idx] = (uint64_t)atoll(eq + 1); if (rv[idx]) any_reg = true; }
+            *eq = '=';
+        }
+
+        printf("# %s -> urm.bc encoding.  registers:", filename);
+        for (uint32_t i = 0; i < prog->reg_count; i++) printf(" %s=s%u", prog->reg_names[i]->data, i);
+        printf("\n");
+
+        char *ps = bignum_to_string(P);
+        printf("P=%s", ps);
+        free(ps);
+        bignum_free(&P);
+
+        if (any_reg) {
+            Bignum R = bignum_from_u64(0);
+            for (int i = (int)prog->reg_count - 1; i >= 0; i--) R = bn_cons(rv[i], R);
+            char *rs = bignum_to_string(R);
+            printf(" R=%s", rs);
+            free(rs);
+            bignum_free(&R);
         }
         printf("\n");
         arena_free(arena);
@@ -289,14 +329,17 @@ int main(int argc, char *argv[]) {
         const char *reg_name = arg;
         const char *value_str = eq + 1;
 
-        // Parse value
-        uint64_t value = (uint64_t)atoll(value_str);
-
-        if (!interp_set_reg(state, reg_name, value)) {
+        // Parse value as an arbitrary-precision non-negative integer (so the
+        // huge Gödel numbers from --emit-urm work, not just 64-bit ones).
+        Bignum value = bignum_from_string(value_str);
+        if (!interp_set_reg_bignum(state, reg_name, value)) {
             fprintf(stderr, "Warning: unknown register '%s'\n", reg_name);
         } else if (verbose) {
-            printf("Set %s = %lu\n", reg_name, value);
+            char *vs = bignum_to_string(value);
+            printf("Set %s = %s\n", reg_name, vs);
+            free(vs);
         }
+        bignum_free(&value);
     }
 
     // Wire up devices (if the program references any magic register). A program
