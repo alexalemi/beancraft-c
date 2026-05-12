@@ -15,7 +15,7 @@
 # [py, py+24)?"), which is `inrange` from the standard library: two
 # lockstep-decrement phases.
 
-use "std"                                    # clear, copy, addn, subn, iseq, inrange
+use "std"                                    # clear, copy, addn, subn, iseq, inrange, note
 
 # --- init --------------------------------------------------------------------
 # Paddle: a 4 x 24 bar at x in [0, 4), top row py (starts 0).  Mirror pyleft so
@@ -40,14 +40,16 @@ frame:
 xRd:     + bdx xRight
 xRight:  - bxright bounceR goR               # at the right wall (bxright==0)?  bounce : move
 goR:     + bx xDone                          #   move right: bx++  (bxright already --'d)
-bounceR: - bdx xDone xDone                   #   hit right wall: bdx 1 -> 0
+bounceR: note 330 35                          #   hit right wall: blip, then bdx 1 -> 0
+         - bdx xDone xDone
 xLeft:   - bx atWall goL                     # at the left edge (bx==0)?  paddle check : move
 goL:     + bxright xDone                     #   move left: bxright++  (bx already --'d)
 atWall:                                       # bx == 0 -- did the paddle catch it?
   inrange by py 24 hit                        # is the ball's row inside the paddle's 24-tall span?
   - hit miss bounceL                          #   hit==0 -> missed; hit==1 -> caught
-bounceL: + bdx xDone                          #   caught: bounce off the paddle, bdx 0 -> 1
-miss:                                         #   missed: respawn the ball centre-left, +x
+bounceL: note 660 35                          #   caught: ping, then bounce off the paddle, bdx 0 -> 1
+         + bdx xDone
+miss:    note 110 220                         #   missed: low buzz, then respawn the ball centre-left, +x
   addn 4 bx
   copy screen/width bxright
   subn 5 bxright
@@ -59,10 +61,12 @@ xDone:
 yRd:     + bdy yDown
 yDown:   - byright bounceD goD
 goD:     + by yEnd
-bounceD: - bdy yEnd yEnd
+bounceD: note 440 25                          # hit the bottom wall
+         - bdy yEnd yEnd
 yUp:     - by bounceU goU
 goU:     + byright yEnd
-bounceU: + bdy yEnd
+bounceU: note 550 25                          # hit the top wall
+         + bdy yEnd
 yEnd:
   # --- draw ---
   inc screen/clear

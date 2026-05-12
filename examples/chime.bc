@@ -1,0 +1,23 @@
+# A little chime: an up-and-down C-major arpeggio (C5 E5 G5 C6 G5 E5 C5) on the
+# audio device's square-wave beeper.  The notes queue up and play in sequence;
+# the program waits for a keystroke and exits once the chime has finished
+# playing.
+#
+# Audio only makes sound in the SDL build (`make sdl`, or `bccompile --sdl`); on
+# a plain build `inc audio/play` is a no-op (the device just isn't there).
+# Frequencies in Hz, rounded: C5 = 523, E5 = 659, G5 = 784, C6 = 1047.
+
+use "std"                                          # clear, addn, note
+
+note 523  140                                      # C5
+note 659  140                                      # E5
+note 784  140                                      # G5
+note 1047 200                                      # C6
+note 784  140                                      # G5
+note 659  140                                      # E5
+note 523  220                                      # C5
+
+# wait for a keystroke; on exit the audio device drains its queue, so the whole
+# chime plays even though we queued it all at once.
+wait: deb con/read done done
+done:

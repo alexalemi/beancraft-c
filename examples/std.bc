@@ -13,6 +13,7 @@
 #   mod4 R               R := R mod 4
 #   iseq A B R           R := 1 if A == B else 0  (A, B consumed)
 #   inrange A B SPAN R   R := 1 if B <= A < B+SPAN else 0   (A, B preserved; SPAN consumed)
+#   note FREQ MS         queue a square-wave tone (audio device; FREQ, MS consumed)
 
 func clear X { - X done self }
 
@@ -83,6 +84,14 @@ func mod4 R {                                      # R := R mod 4
   e3: + R e3b
   e3b: + R e3c
   e3c: + R done
+}
+
+func note FREQ MS {                                # queue a square-wave tone: FREQ Hz for MS ms
+  clear audio/freq
+  addn FREQ audio/freq
+  clear audio/duration
+  addn MS audio/duration
+  inc audio/play
 }
 
 func iseq A B R {                                  # R := 1 if A == B else 0   (A, B consumed)

@@ -29,7 +29,8 @@ enum DevOp {
     DEV_PAL_SET,
     DEV_SCR_PLOT, DEV_SCR_CLEAR, DEV_SCR_FLUSH,
     DEV_SCR_SPRITE, DEV_SCR_RECT, DEV_SCR_TEXT, DEV_SCR_SAMPLE,
-    DEV_INC_LAST = DEV_SCR_SAMPLE,
+    DEV_AUDIO_PLAY,
+    DEV_INC_LAST = DEV_AUDIO_PLAY,
     // deb-polls (`deb R` lets the device refresh its registers first)
     DEV_CON_READ, DEV_KBD_EVENT, DEV_MOUSE_EVENT,
     DEV_POLL_LAST = DEV_MOUSE_EVENT,
@@ -75,6 +76,8 @@ static const struct { const char *name; int op; } MAGIC[] = {
     { "kbd/char",     DEV_DATA }, { "kbd/code", DEV_DATA },
     { "mouse/event",  DEV_MOUSE_EVENT  },
     { "mouse/x",      DEV_DATA }, { "mouse/y", DEV_DATA }, { "mouse/buttons", DEV_DATA },
+    { "audio/freq",   DEV_DATA }, { "audio/duration", DEV_DATA },
+    { "audio/play",   DEV_AUDIO_PLAY   },
 };
 #define N_MAGIC (sizeof(MAGIC) / sizeof(MAGIC[0]))
 
@@ -106,6 +109,7 @@ static const char *const DEP_SPRITE[] = { "screen/x", "screen/y", "screen/color"
 static const char *const DEP_RECT[]  = { "screen/x", "screen/y", "screen/color", "screen/rectw", "screen/recth" };
 static const char *const DEP_TEXT[]  = { "screen/x", "screen/y", "screen/color", "screen/glyph" };
 static const char *const DEP_SAMPLE[] = { "screen/x", "screen/y", "screen/pixel" };
+static const char *const DEP_AUDIO[]  = { "audio/freq", "audio/duration" };
 
 const char *const *device_dependencies(const char *name, uint32_t *count) {
     switch (magic_op(name)) {
@@ -120,6 +124,7 @@ const char *const *device_dependencies(const char *name, uint32_t *count) {
     case DEV_SCR_RECT:     *count = 5; return DEP_RECT;
     case DEV_SCR_TEXT:     *count = 4; return DEP_TEXT;
     case DEV_SCR_SAMPLE:   *count = 3; return DEP_SAMPLE;
+    case DEV_AUDIO_PLAY:   *count = 2; return DEP_AUDIO;
     case DEV_KBD_EVENT:    *count = 2; return DEP_KBD;
     case DEV_MOUSE_EVENT:  *count = 3; return DEP_MOUSE;
     case DEV_SCR_CLEAR: case DEV_SCR_FLUSH: *count = 2; return DEP_SCRSZ;
@@ -148,6 +153,7 @@ static struct {
     int i_scr_row[8], i_scr_rectw, i_scr_recth, i_scr_glyph, i_scr_pixel;
     int i_kbd_char, i_kbd_code;
     int i_mouse_x, i_mouse_y, i_mouse_buttons;
+    int i_audio_freq, i_audio_dur;
 
     uint64_t rng;
 
@@ -176,6 +182,7 @@ static struct {
     SDL_Renderer *sdl_ren;
     SDL_Texture  *sdl_tex;
     uint32_t     *sdl_rgb;       // scr_w*scr_h ARGB scratch for the texture
+    SDL_AudioDeviceID sdl_audio; // 0 until/unless the audio device opens
 #endif
 } D = {
     .i_sys_code = -1, .i_con_byte = -1,
@@ -186,6 +193,7 @@ static struct {
     .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1, .i_scr_pixel = -1,
     .i_kbd_char = -1, .i_kbd_code = -1,
     .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,
+    .i_audio_freq = -1, .i_audio_dur = -1,
 };
 
 static void set_reg(int idx, uint64_t value) {
@@ -408,11 +416,52 @@ static void sdl_render(void) {
     SDL_RenderPresent(D.sdl_ren);
 }
 
+// Wait (briefly) for any queued audio to finish playing, then close the device.
+static void sdl_audio_close(void) {
+    if (!D.sdl_audio) return;
+    for (int i = 0; i < 500 && SDL_GetQueuedAudioSize(D.sdl_audio) > 0; i++) SDL_Delay(10);
+    SDL_CloseAudioDevice(D.sdl_audio);
+    D.sdl_audio = 0;
+}
+
 static void sdl_shutdown(void) {
+    sdl_audio_close();
     if (D.sdl_tex) SDL_DestroyTexture(D.sdl_tex);
     if (D.sdl_ren) SDL_DestroyRenderer(D.sdl_ren);
     if (D.sdl_win) SDL_DestroyWindow(D.sdl_win);
     SDL_Quit();
+}
+
+// Open a mono 16-bit 44.1 kHz output device for the square-wave beeper.
+static bool sdl_audio_init(void) {
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return false;
+    SDL_AudioSpec want;
+    SDL_zero(want);
+    want.freq = 44100;
+    want.format = AUDIO_S16SYS;
+    want.channels = 1;
+    want.samples = 2048;
+    D.sdl_audio = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
+    if (!D.sdl_audio) { SDL_QuitSubSystem(SDL_INIT_AUDIO); return false; }
+    SDL_PauseAudioDevice(D.sdl_audio, 0);   // start playing (the queue is empty)
+    return true;
+}
+
+// Queue a square-wave tone of `freq` Hz for `dur` ms (clamped, capped backlog).
+static void sdl_audio_tone(uint64_t freq, uint64_t dur) {
+    if (!D.sdl_audio || dur == 0) return;
+    if (freq < 20) freq = 20;
+    if (freq > 12000) freq = 12000;
+    if (dur > 4000) dur = 4000;
+    if (SDL_GetQueuedAudioSize(D.sdl_audio) > 22050u * sizeof(int16_t)) return;  // ~0.25 s backlog cap
+    uint32_t total = (uint32_t)(44100u * dur / 1000u);
+    uint32_t half  = (uint32_t)(22050u / freq);   // samples per half-period
+    if (half == 0) half = 1;
+    int16_t *buf = malloc((size_t)total * sizeof(int16_t));
+    if (!buf) return;
+    for (uint32_t i = 0; i < total; i++) buf[i] = ((i / half) & 1u) ? -6000 : 6000;
+    SDL_QueueAudio(D.sdl_audio, buf, total * sizeof(int16_t));
+    free(buf);
 }
 #endif // BC_SDL
 
@@ -433,7 +482,7 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     D.deb_mask = calloc(reg_count, sizeof(bool));
     D.op_of = malloc(reg_count * sizeof(int));
 
-    bool wants_screen = false, wants_kbd = false, wants_mouse = false;
+    bool wants_screen = false, wants_kbd = false, wants_mouse = false, wants_audio = false;
     for (uint32_t i = 0; i < reg_count; i++) {
         int op = magic_op(reg_names[i]);
         D.op_of[i] = op;
@@ -443,6 +492,7 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
             if (!strncmp(reg_names[i], "screen/", 7) || !strncmp(reg_names[i], "palette/", 8)) wants_screen = true;
             if (!strncmp(reg_names[i], "kbd/", 4))   wants_kbd = true;
             if (!strncmp(reg_names[i], "mouse/", 6)) wants_mouse = true;
+            if (!strncmp(reg_names[i], "audio/", 6)) wants_audio = true;
         }
 
         const char *nm = reg_names[i];
@@ -478,6 +528,8 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         else if (!strcmp(nm, "mouse/x"))        D.i_mouse_x = (int)i;
         else if (!strcmp(nm, "mouse/y"))        D.i_mouse_y = (int)i;
         else if (!strcmp(nm, "mouse/buttons"))  D.i_mouse_buttons = (int)i;
+        else if (!strcmp(nm, "audio/freq"))     D.i_audio_freq = (int)i;
+        else if (!strcmp(nm, "audio/duration")) D.i_audio_dur = (int)i;
     }
 
     struct timespec ts;
@@ -494,6 +546,7 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     } else
 #else
     (void)wants_mouse;   // the mouse device only exists in the SDL build
+    (void)wants_audio;   // the audio device only makes sound in the SDL build
 #endif
     if (wants_screen) {
         D.have_screen = true;
@@ -530,6 +583,10 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         D.kbd_raw = true;
     }
 
+#ifdef BC_SDL
+    if (wants_audio) sdl_audio_init();   // if it fails, `inc audio/play` is just a no-op
+#endif
+
     atexit(device_shutdown);
     return true;
 }
@@ -538,6 +595,7 @@ void device_shutdown(void) {
     if (!D.active) return;
     D.active = false;
 #ifdef BC_SDL
+    if (!D.sdl_active) sdl_audio_close();   // audio-only program: drain & close here
     if (D.sdl_active) { sdl_shutdown(); return; }
 #endif
     if (D.alt_screen) { fputs("\x1b[0m\x1b[?25h\x1b[?1049l", stdout); fflush(stdout); }
@@ -660,6 +718,12 @@ void device_on_inc(uint32_t i) {
         set_reg(D.i_scr_pixel, v);
         break;
     }
+
+    case DEV_AUDIO_PLAY:
+#ifdef BC_SDL
+        sdl_audio_tone(reg_u64(D.i_audio_freq), reg_u64(D.i_audio_dur));
+#endif
+        break;   // no-op without the SDL build
 
     case DEV_SCR_FLUSH:
 #ifdef BC_SDL
