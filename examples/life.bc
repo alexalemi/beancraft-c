@@ -1,0 +1,178 @@
+# Conway's Game of Life, on a 40x40 grid of single pixels with a one-cell dead
+# border (so the live area is x,y in [1,38]).  Seeded with a couple of
+# R-pentominoes, which explode into a long chaotic evolution.  One generation per
+# displayed frame; press any key to quit.  (Needs a screen at least 40x40 pixels
+# -- any terminal at least 40 columns by 20 rows -- and is much faster compiled:
+# `bccompile -O examples/life.bc`.)
+#
+# The double-buffering problem (you can't overwrite a cell while neighbours still
+# need its old value) is solved with bit-packing: bit 0 of a cell's colour is
+# "alive now", bit 1 is "alive next".  Phase 1 reads bit 0 of the 3x3 neighbourhood
+# and writes bit 1; phase 2 shifts bit 1 down into bit 0 (colour := colour / 2).
+# `screen/sample` reads a pixel's colour back, which is the whole point.
+
+func clear X { - X done self }                     # X := 0
+
+func copy From To {                                # To := From   (From preserved)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                                    # R += N   (N is a value, consumed)
+  l: - N done
+  + R l
+}
+
+func half X {                                      # X := floor(X / 2)
+  - q qz self
+  qz: - X mv q1
+  q1: - X mv q2
+  q2: + q qz
+  mv: - q done qm
+  qm: + X mv
+}
+
+func bit0 N R {                                    # R := N & 1   (N consumed)
+  - R r0 self
+  r0: - N done dec1                                # N==0: even, R stays 0
+  dec1: - N r1 r0                                  # N==0: odd!  ;  else N-- -> loop
+  r1: + R
+}
+
+func cell PX PY {                                  # paint cell (PX, PY) alive (colour 1)
+  copy PX screen/x
+  copy PY screen/y
+  clear screen/color
+  + screen/color
+  inc screen/plot
+}
+
+func nbr NX NY CNT {                                # CNT++ if cell (NX, NY) is alive now
+  copy NX screen/x
+  copy NY screen/y
+  inc screen/sample
+  copy screen/pixel pp
+  bit0 pp a
+  - a nd nyes
+nyes: + CNT nd
+nd:
+}
+
+# --- set up: blank board, "alive" (colour 1) rendered as white ---
+inc screen/clear
+clear palette/index
++ palette/index                                    # palette/index := 1
+clear palette/r
+addn 255 palette/r
+clear palette/g
+addn 255 palette/g
+clear palette/b
+addn 255 palette/b
+inc palette/set                                    # palette[1] := white
+
+# --- seed: two R-pentominoes (.XX / XX. / .X.) ---
+cell 19 18
+cell 20 18
+cell 18 19
+cell 19 19
+cell 19 20
+cell 29 27
+cell 30 27
+cell 28 28
+cell 29 28
+cell 29 29
+
+# --- one generation per displayed frame ---
+gen:
+# phase 1: write each inner cell's next state into bit 1 of its colour
+  clear y
+  + y                                              # y := 1
+  clear ym1                                        # ym1 := 0
+  clear yp1
+  addn 2 yp1                                       # yp1 := 2
+  clear yn
+  addn 38 yn
+p1yLoop: - yn phase2 p1yBody
+p1yBody:
+  clear x
+  + x                                              # x := 1
+  clear xm1                                        # xm1 := 0
+  clear xp1
+  addn 2 xp1                                        # xp1 := 2
+  clear xn
+  addn 38 xn
+p1xLoop: - xn p1xRowDone p1xBody
+p1xBody:
+  copy x screen/x                                  # read this cell's colour / alive bit
+  copy y screen/y
+  inc screen/sample
+  copy screen/pixel cur
+  copy cur ctmp
+  bit0 ctmp alive
+  clear count                                      # count the 8 neighbours
+  nbr xm1 ym1 count
+  nbr x   ym1 count
+  nbr xp1 ym1 count
+  nbr xm1 y   count
+  nbr xp1 y   count
+  nbr xm1 yp1 count
+  nbr x   yp1 count
+  nbr xp1 yp1 count
+  copy count cc                                    # rules: alive next iff count==3, or count==2 and alive now
+  - cc p1adv c1                                    # 0  -> dead
+c1:    - cc p1adv c2                               # 1  -> dead
+c2:    - cc isC2 c3
+c3:    - cc isC3 cMore
+cMore: - z p1adv                                   # >=4 -> dead
+isC2:  - alive p1adv doSet                         # ==2 -> unchanged
+isC3:                                              # ==3 -> alive next  (fall through)
+doSet:
+  copy x screen/x
+  copy y screen/y
+  copy cur screen/color
+  addn 2 screen/color                              # set bit 1
+  inc screen/plot
+p1adv:
+  + x
+  + xm1
+  + xp1
+  - z p1xLoop
+p1xRowDone:
+  + y
+  + ym1
+  + yp1
+  - z p1yLoop
+phase2:
+# phase 2: commit -- colour := bit 1  (i.e. colour := colour / 2)
+  clear y
+  + y
+  clear yn
+  addn 38 yn
+p2yLoop: - yn done2 p2yBody
+p2yBody:
+  clear x
+  + x
+  clear xn
+  addn 38 xn
+p2xLoop: - xn p2xRowDone p2xBody
+p2xBody:
+  copy x screen/x
+  copy y screen/y
+  inc screen/sample
+  half screen/pixel
+  copy screen/pixel screen/color
+  inc screen/plot
+  + x
+  - z p2xLoop
+p2xRowDone:
+  + y
+  - z p2yLoop
+done2:
+  inc screen/flush
+  deb kbd/event gen quit
+quit:
