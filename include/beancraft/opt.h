@@ -27,6 +27,10 @@ typedef enum {
     IR_OPT_TRANSFER,      // for d in dests: reg[d] += reg[REG];  reg[REG] = 0;  goto arg_a
     IR_OPT_DIVMOD,        // r = reg[REG] mod K;  for d in dests: reg[d] += reg[REG] / K;
                           //   reg[REG] = 0;  goto exits[r]    (K = arg_b)
+    IR_OPT_MULADD,        // counter REG = C, dests = [S, T, D_1..D_m] (m >= 0).
+                          //   if C != 0: for d in D_i: reg[d] += C*reg[S] + (C-1)*reg[T];
+                          //              reg[S] += reg[T];  reg[T] = 0;  reg[C] = 0;
+                          //   goto arg_a    (the unrolled `for C { TRANSFER S->{D..,T}; TRANSFER T->{S} }`)
     IR_OPT_COPY,          // reserved (non-destructive copy); not emitted yet
 } IrOptOp;
 
@@ -36,7 +40,9 @@ typedef enum {
 // dests[dest_off .. dest_off+dest_count) holding its destination register
 // indices. A DIVMOD owns dests[dest_off .. dest_off+dest_count) for its quotient
 // destination registers, immediately followed by dests[.. + arg_b) holding its
-// arg_b exit instruction indices (one per remainder 0..arg_b-1).
+// arg_b exit instruction indices (one per remainder 0..arg_b-1). A MULADD owns
+// dests[dest_off .. dest_off+dest_count) holding [S, T, D_1, ..., D_m] (so
+// dest_count == m + 2, m >= 0); its `reg` is the counter C and `arg_a` the exit.
 typedef struct {
     IrOptOp op;
     uint32_t reg;         // primary register (src for TRANSFER/DIVMOD, target otherwise)
@@ -77,6 +83,9 @@ typedef enum {
     PATTERN_TRANSFER,     // deb A exit; inc D1..Dn; jmp deb        -> Di += A; A = 0; goto exit
     PATTERN_DIVMOD,       // deb R e0; .. deb R e(k-1); inc Q1..Qm; jmp deb
                           //   -> Qi += R/k;  goto e_(R mod k);  R = 0    (k >= 2)
+    PATTERN_MULADD,       // deb C exit (->next); deb S txexit (->next); inc D1..Dm; inc T (->deb S);
+                          //   deb T (->deb C) (->next); inc S (->deb T)
+                          //   -> Di += C*S + (C-1)*T;  S += T;  T = 0;  C = 0;  goto exit
 } PatternType;
 
 // Detected pattern info
@@ -84,9 +93,9 @@ typedef struct {
     PatternType type;
     uint32_t start_inst;  // first instruction of the pattern
     uint32_t end_inst;    // one past the last instruction of the pattern
-    uint32_t src_reg;     // source / cleared / dividend register
-    uint32_t exit_inst;   // TRANSFER/ZERO: where to continue afterwards
-    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: increment / quotient targets
+    uint32_t src_reg;     // source / cleared / dividend / MULADD-counter register
+    uint32_t exit_inst;   // TRANSFER/ZERO/MULADD: where to continue afterwards
+    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: inc/quotient targets; MULADD: [S, T, D_1..D_m]
     uint32_t dst_count;
     uint32_t div_k;                       // DIVMOD: the divisor
     uint32_t exit_insts[IR_OPT_MAX_DESTS];// DIVMOD: continuation per remainder 0..div_k-1

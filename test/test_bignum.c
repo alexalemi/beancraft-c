@@ -214,6 +214,96 @@ TEST(add_overflow) {
 }
 
 // ============================================================
+// Multiplication tests
+// ============================================================
+
+TEST(mul_zero) {
+    Bignum a = bignum_from_u64(0), b = bignum_from_u64(0);
+    Bignum c = bignum_mul(a, b);
+    assert(bignum_is_zero(c));
+    bignum_free(&c);
+
+    Bignum x = bignum_from_u64(5), y = bignum_from_u64(0);
+    Bignum z = bignum_mul(x, y);
+    assert(bignum_is_zero(z));
+    bignum_free(&z);
+
+    Bignum p = bignum_from_u64(0), q = bignum_from_u64(5);
+    Bignum r = bignum_mul(p, q);
+    assert(bignum_is_zero(r));
+    bignum_free(&r);
+}
+
+TEST(mul_small) {
+    struct { uint64_t a, b, prod; } cases[] = {
+        { 1, 1, 1 }, { 7, 8, 56 }, { 12, 12, 144 }, { 100, 200, 20000 },
+        { 13, 17, 221 }, { 1, 123456789, 123456789 },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        Bignum a = bignum_from_u64(cases[i].a);
+        Bignum b = bignum_from_u64(cases[i].b);
+        Bignum c = bignum_mul(a, b);
+        uint64_t val;
+        assert(bignum_to_u64(c, &val));
+        assert(val == cases[i].prod);
+        // Operands unchanged.
+        assert(bignum_eq(a, bignum_from_u64(cases[i].a)));
+        assert(bignum_eq(b, bignum_from_u64(cases[i].b)));
+        bignum_free(&c);
+    }
+}
+
+TEST(mul_immediate_overflows_64) {
+    // 0xFFFFFFFF * 0xFFFFFFFF = 0xFFFFFFFE00000001, still fits in u64 but not in
+    // an immediate (which is only 63 bits).
+    Bignum a = bignum_from_u64(0xFFFFFFFFULL);
+    Bignum b = bignum_from_u64(0xFFFFFFFFULL);
+    Bignum c = bignum_mul(a, b);
+    uint64_t val;
+    assert(bignum_to_u64(c, &val));
+    assert(val == 0xFFFFFFFE00000001ULL);
+    bignum_free(&c);
+
+    // A genuinely 128-bit product: (2^63 - 1) * 4 = 2^65 - 4 -> 2 limbs.
+    Bignum x = bignum_from_u64(BIGNUM_MAX_IMMEDIATE);  // 2^62 - 1
+    Bignum y = bignum_from_u64(8);
+    Bignum z = bignum_mul(x, y);                       // 2^65 - 8, > 2^64
+    assert(!bignum_is_immediate(z));
+    assert(!bignum_to_u64(z, &val));                   // doesn't fit in 64 bits
+    // Check via string: (2^62 - 1) * 8 = 2^65 - 8 = 36893488147419103224
+    char *s = bignum_to_string(z);
+    assert(strcmp(s, "36893488147419103224") == 0);
+    free(s);
+    bignum_free(&z);
+}
+
+TEST(mul_heap_operands) {
+    // A ~30-digit number times another, checked against the known product.
+    Bignum a = bignum_from_string("123456789012345678901234567890");
+    Bignum b = bignum_from_string("987654321098765432109876543210");
+    assert(!bignum_is_immediate(a));
+    assert(!bignum_is_immediate(b));
+    Bignum c = bignum_mul(a, b);
+    char *s = bignum_to_string(c);
+    // 123456789012345678901234567890 * 987654321098765432109876543210
+    assert(strcmp(s, "121932631137021795226185032733622923332237463801111263526900") == 0);
+    free(s);
+    bignum_free(&a);
+    bignum_free(&b);
+    bignum_free(&c);
+
+    // heap * immediate
+    Bignum big = bignum_from_string("100000000000000000000");  // 10^20
+    Bignum two = bignum_from_u64(2);
+    Bignum d = bignum_mul(big, two);
+    char *ds = bignum_to_string(d);
+    assert(strcmp(ds, "200000000000000000000") == 0);
+    free(ds);
+    bignum_free(&big);
+    bignum_free(&d);
+}
+
+// ============================================================
 // String conversion tests
 // ============================================================
 
@@ -325,6 +415,11 @@ int main(void) {
     RUN(add_simple);
     RUN(add_into);
     RUN(add_overflow);
+
+    RUN(mul_zero);
+    RUN(mul_small);
+    RUN(mul_immediate_overflows_64);
+    RUN(mul_heap_operands);
 
     RUN(to_string_zero);
     RUN(to_string_small);

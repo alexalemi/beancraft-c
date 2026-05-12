@@ -32,6 +32,28 @@ check() {
     fi
 }
 
+# Like check(), but runs an already-built native binary.
+check_bin() {
+    local name="$1"
+    local expected="$2"
+    local bin="$3"
+    shift 3
+
+    local output=$("$bin" "$@" 2>&1)
+    local actual=$(echo "$output" | grep -E "^${expected%%=*} = " | head -1 | sed 's/.* = //')
+    local expect_val="${expected#*=}"
+
+    if [ "$actual" = "$expect_val" ]; then
+        echo -e "${GREEN}PASS${NC}: $name"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC}: $name"
+        echo "  Expected: $expected"
+        echo "  Got: ${expected%%=*} = $actual"
+        ((FAIL++))
+    fi
+}
+
 echo "=========================================="
 echo "Beancraft-C Example Test Suite"
 echo "=========================================="
@@ -104,6 +126,64 @@ check "max(3, 5) = 5" "Out=5" examples/max.bc A=3 B=5
 check "max(5, 3) = 5" "Out=5" examples/max.bc A=5 B=3
 check "max(7, 7) = 7" "Out=7" examples/max.bc A=7 B=7
 check "max(0, 10) = 10" "Out=10" examples/max.bc A=0 B=10
+
+# --- Optimized (-O) variants: exercise the loop folds (TRANSFER/DIVMOD/MULADD) ---
+echo
+echo -e "${YELLOW}=== Optimized -O (folds must not change results) ===${NC}"
+check "mul -O: 0 * 5 = 0" "Out=0" examples/mul.bc -O A=0 B=5
+check "mul -O: 5 * 0 = 0" "Out=0" examples/mul.bc -O A=5 B=0
+check "mul -O: 1 * 1 = 1" "Out=1" examples/mul.bc -O A=1 B=1
+check "mul -O: 7 * 8 = 56" "Out=56" examples/mul.bc -O A=7 B=8
+check "mul -O: 13 * 17 = 221" "Out=221" examples/mul.bc -O A=13 B=17
+check "mul -O: 100 * 200 = 20000" "Out=20000" examples/mul.bc -O A=100 B=200
+check "div -O: 100 / 7 = 14" "Quotient=14" examples/div.bc -O Dividend=100 Divisor=7
+check "iseven -O: 100 is even" "Even=1" examples/iseven.bc -O N=100
+check "factorial -O: 0! = 1" "Out=1" examples/factorial.bc -O N=0
+check "factorial -O: 5! = 120" "Out=120" examples/factorial.bc -O N=5
+check "factorial -O: 8! = 40320" "Out=40320" examples/factorial.bc -O N=8
+check "pow -O: 0^0 = 1" "Out=1" examples/pow.bc -O Base=0 Exp=0
+check "pow -O: 2^10 = 1024" "Out=1024" examples/pow.bc -O Base=2 Exp=10
+check "pow -O: 3^4 = 81" "Out=81" examples/pow.bc -O Base=3 Exp=4
+check "pow -O: 10^5 = 100000" "Out=100000" examples/pow.bc -O Base=10 Exp=5
+check "fib -O: fib(20) = 6765" "Out=6765" examples/fib.bc -O N=20
+check "gcd -O: gcd(48,18) = 6" "Out=6" examples/gcd.bc -O A=48 B=18
+
+# --- Compiled (-O) path: only if qbe + the bccompile script are available ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_DIR="$(dirname "$SCRIPT_DIR")"
+BCCOMPILE="$PROJ_DIR/scripts/bccompile"
+if command -v qbe >/dev/null 2>&1 && [ -x "$BCCOMPILE" ]; then
+    echo
+    echo -e "${YELLOW}=== Compiled with -O (QBE backend; folds incl. MULADD) ===${NC}"
+    CTMP="$(mktemp -d)"
+    trap 'rm -rf "$CTMP"' EXIT
+    if "$BCCOMPILE" -O examples/mul.bc "$CTMP/mul" >/dev/null 2>&1; then
+        check_bin "compiled mul -O: 7 * 8 = 56"       "Out=56"       "$CTMP/mul" A=7 B=8
+        check_bin "compiled mul -O: 0 * 5 = 0"        "Out=0"        "$CTMP/mul" A=0 B=5
+        check_bin "compiled mul -O: 5 * 0 = 0"        "Out=0"        "$CTMP/mul" A=5 B=0
+        check_bin "compiled mul -O: 13 * 17 = 221"    "Out=221"      "$CTMP/mul" A=13 B=17
+        check_bin "compiled mul -O: 1234 * 5678"      "Out=7006652"  "$CTMP/mul" A=1234 B=5678
+    else
+        echo -e "${YELLOW}SKIP${NC}: bccompile -O examples/mul.bc failed"
+    fi
+    if "$BCCOMPILE" -O examples/factorial.bc "$CTMP/fact" >/dev/null 2>&1; then
+        check_bin "compiled factorial -O: 0! = 1"     "Out=1"        "$CTMP/fact" N=0
+        check_bin "compiled factorial -O: 6! = 720"   "Out=720"      "$CTMP/fact" N=6
+        check_bin "compiled factorial -O: 12! "       "Out=479001600" "$CTMP/fact" N=12
+    fi
+    if "$BCCOMPILE" -O examples/pow.bc "$CTMP/pow" >/dev/null 2>&1; then
+        check_bin "compiled pow -O: 0^0 = 1"          "Out=1"        "$CTMP/pow" Base=0 Exp=0
+        check_bin "compiled pow -O: 2^10 = 1024"      "Out=1024"     "$CTMP/pow" Base=2 Exp=10
+        check_bin "compiled pow -O: 7^3 = 343"        "Out=343"      "$CTMP/pow" Base=7 Exp=3
+    fi
+    # Compiled -O0 (no folds) must still be correct.
+    if "$BCCOMPILE" -O0 examples/mul.bc "$CTMP/mul0" >/dev/null 2>&1; then
+        check_bin "compiled mul -O0: 7 * 8 = 56"      "Out=56"       "$CTMP/mul0" A=7 B=8
+    fi
+else
+    echo
+    echo -e "${YELLOW}(skipping compiled-path tests: qbe not found)${NC}"
+fi
 
 # --- Summary ---
 echo

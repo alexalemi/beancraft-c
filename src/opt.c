@@ -147,8 +147,78 @@ static Pattern detect_divmod_pattern(const IrProgram *prog, uint32_t start) {
     return p;
 }
 
+// MULADD:  the `for C { TRANSFER S->{D_1..D_m, T}; TRANSFER T->{S} }` idiom, i.e.
+//   deb C exit (->start+1); deb S txexit (->start+2); inc D_1..D_m; inc T (->start+1);
+//   deb T start (->txexit+1); inc S (->txexit)
+//   ->  D_i += C*S + (C-1)*T;  S += T;  T := 0;  C := 0;  goto exit      (no-op when C == 0)
+// (the `(C-1)*T` term covers the case where T is nonzero at loop entry; for `mul.bc`
+//  T is zeroed beforehand so it reduces to D_i += C*S, with S preserved.)
+static Pattern detect_muladd_pattern(const IrProgram *prog, uint32_t start) {
+    Pattern p = { .type = PATTERN_NONE };
+
+    // [start]   deb C  ? exit : start+1
+    if (!is_deb(prog, start)) return p;
+    const IrInst *deb_c = &prog->insts[start];
+    if (deb_c->arg_b != start + 1) return p;
+    uint32_t C = deb_c->reg;
+    uint32_t exit_inst = deb_c->arg_a;
+
+    // [start+1] deb S  ? tx_exit : start+2
+    if (!is_deb(prog, start + 1)) return p;
+    const IrInst *deb_s = &prog->insts[start + 1];
+    if (deb_s->arg_b != start + 2) return p;
+    uint32_t S = deb_s->reg;
+    uint32_t tx_exit = deb_s->arg_a;
+
+    // [start+2 ..] inc D_1; ...; inc D_m; inc T  (last one loops back to deb S)
+    uint32_t regs[IR_OPT_MAX_DESTS];
+    uint32_t n = collect_inc_run(prog, start + 2, start + 1, S, regs);
+    if (n == 0) return p;                       // need at least the temp T
+    if (tx_exit != start + 2 + n) return p;     // the whole loop body must be one contiguous block
+    uint32_t T = regs[n - 1];                   // last inc is the temp; the first m = n-1 are accumulators
+
+    // [tx_exit] deb T  ? start : tx_exit+1     (the "restore S from T" transfer, looping back to deb C)
+    if (!is_deb(prog, tx_exit)) return p;
+    const IrInst *deb_t = &prog->insts[tx_exit];
+    if (deb_t->reg != T || deb_t->arg_a != start || deb_t->arg_b != tx_exit + 1) return p;
+
+    // [tx_exit+1] inc S  (loops back to deb T) -- exactly one inc, of S
+    uint32_t regs2[IR_OPT_MAX_DESTS];
+    uint32_t n2 = collect_inc_run(prog, tx_exit + 1, tx_exit, T, regs2);
+    if (n2 != 1 || regs2[0] != S) return p;
+
+    uint32_t end_inst = tx_exit + 2;
+
+    // Distinctness of {C, S, T, D_1..D_m}. collect_inc_run already excluded S from
+    // `regs`, so T != S and D_i != S come for free; check C against everything and
+    // the D_i/T against each other.
+    if (C == S) return p;
+    for (uint32_t a = 0; a < n; a++) {
+        if (regs[a] == C) return p;
+        for (uint32_t b = a + 1; b < n; b++) if (regs[a] == regs[b]) return p;
+    }
+
+    // We pack [S, T, D_1..D_m] into the dests pool -> n + 1 entries.
+    if (n + 1 > IR_OPT_MAX_DESTS) return p;
+
+    if (!body_is_private(prog, start, end_inst, &exit_inst, 1)) return p;
+
+    p.type = PATTERN_MULADD;
+    p.start_inst = start;
+    p.end_inst = end_inst;
+    p.src_reg = C;
+    p.exit_inst = exit_inst;
+    p.dst_regs[0] = S;
+    p.dst_regs[1] = T;
+    for (uint32_t i = 0; i + 1 < n; i++) p.dst_regs[2 + i] = regs[i];   // D_1..D_m
+    p.dst_count = n + 1;
+    return p;
+}
+
 Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
-    Pattern p = detect_transfer_pattern(prog, start);
+    Pattern p = detect_muladd_pattern(prog, start);
+    if (p.type != PATTERN_NONE) return p;
+    p = detect_transfer_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
     p = detect_divmod_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
@@ -282,6 +352,15 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
                 for (uint32_t e = 0; e < p->div_k; e++)
                     opt->dests[opt->dest_total++] = p->exit_insts[e];  // remapped in pass 3
                 break;
+            case PATTERN_MULADD:
+                out.op = IR_OPT_MULADD;
+                out.reg = p->src_reg;              // the counter C
+                out.arg_a = p->exit_inst;          // remapped in pass 3
+                out.dest_off = opt->dest_total;
+                out.dest_count = p->dst_count;     // [S, T, D_1..D_m]
+                for (uint32_t d = 0; d < p->dst_count; d++)
+                    opt->dests[opt->dest_total++] = p->dst_regs[d];
+                break;
             default:
                 break;
             }
@@ -303,6 +382,7 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
         case IR_OPT_INC:
         case IR_OPT_ZERO:
         case IR_OPT_TRANSFER:
+        case IR_OPT_MULADD:   // dests hold register indices, not instructions; only arg_a is remapped
         case IR_OPT_COPY:
             if (inst->arg_a < prog->inst_count) inst->arg_a = inst_map[inst->arg_a];
             break;
@@ -363,6 +443,16 @@ void ir_opt_print(const IrOptProgram *prog) {
             for (uint32_t e = 0; e < inst->arg_b; e++)
                 printf("%s%u", e ? ", " : "", exits[e]);
             printf("]\n");
+            break;
+        }
+        case IR_OPT_MULADD: {
+            uint32_t S = prog->dests[inst->dest_off];
+            uint32_t T = prog->dests[inst->dest_off + 1];
+            printf("MULADD C=%s S=%s T=%s -> {", prog->reg_names[inst->reg]->data,
+                   prog->reg_names[S]->data, prog->reg_names[T]->data);
+            for (uint32_t d = inst->dest_off + 2; d < inst->dest_off + inst->dest_count; d++)
+                printf("%s%s", d > inst->dest_off + 2 ? ", " : "", prog->reg_names[prog->dests[d]]->data);
+            printf("} (each += C*S + (C-1)*T), then %u\n", inst->arg_a);
             break;
         }
         case IR_OPT_COPY:

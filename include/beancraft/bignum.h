@@ -106,6 +106,9 @@ bool bignum_dec(Bignum *x);
 // Add: returns a + b (allocates new bignum)
 Bignum bignum_add(Bignum a, Bignum b);
 
+// Multiply: returns a * b (allocates new bignum). Does NOT modify a or b.
+Bignum bignum_mul(Bignum a, Bignum b);
+
 // Add in place: dst += src
 bool bignum_add_into(Bignum *dst, Bignum src);
 

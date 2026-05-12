@@ -125,6 +125,34 @@ void interp_step(InterpState *state) {
         break;
     }
 
+    case IR_OPT_MULADD: {
+        // Folded `for C { D_i += S; T += S; S := 0; S += T; T := 0 }`.
+        // After C >= 1 iterations: D_i += C*S + (C-1)*T;  S := S + T;  T := 0;  C := 0
+        // (using the initial S and T). C == 0 is a no-op. dests = [S, T, D_1..D_m];
+        // none of {C, S, T, D_i} alias each other, so reading regs is order-safe.
+        uint32_t Ci = inst->reg;
+        if (!bignum_is_zero(state->regs[Ci])) {
+            uint32_t Si = prog->dests[inst->dest_off];
+            uint32_t Ti = prog->dests[inst->dest_off + 1];
+            Bignum Cm1 = bignum_clone(state->regs[Ci]);
+            bignum_dec(&Cm1);                                          // C - 1 (C >= 1)
+            Bignum cS   = bignum_mul(state->regs[Si], state->regs[Ci]);  // C * S
+            Bignum cm1T = bignum_mul(state->regs[Ti], Cm1);             // (C-1) * T
+            Bignum addend = bignum_add(cS, cm1T);
+            for (uint32_t d = inst->dest_off + 2; d < inst->dest_off + inst->dest_count; d++)
+                bignum_add_into(&state->regs[prog->dests[d]], addend);
+            bignum_add_into(&state->regs[Si], state->regs[Ti]);        // S += T (T untouched so far)
+            bignum_set_zero(&state->regs[Ti]);                         // T := 0
+            bignum_set_zero(&state->regs[Ci]);                         // C := 0
+            bignum_free(&Cm1);
+            bignum_free(&cS);
+            bignum_free(&cm1T);
+            bignum_free(&addend);
+        }
+        state->pc = inst->arg_a;
+        break;
+    }
+
     case IR_OPT_COPY:
     default:
         // Not emitted by the current optimizer; fall through harmlessly.

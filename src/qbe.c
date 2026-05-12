@@ -234,6 +234,20 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
 
     emit_header(&buf, prog->reg_count, true);
 
+    // Each MULADD that fans out over m >= 1 accumulators needs an array of those
+    // register indices to hand to $bc_muladd. Emit them as data here (top level;
+    // QBE forbids `alloc` outside the entry block, so a per-instruction stack
+    // array isn't an option). m == 0 MULADDs pass a null pointer instead.
+    for (uint32_t i = 0; i < prog->inst_count; i++) {
+        const IrOptInst *inst = &prog->insts[i];
+        if (inst->op != IR_OPT_MULADD || inst->dest_count <= 2) continue;
+        buf_printf(&buf, "data $bc_muladd_d%u = align 8 {", i);
+        for (uint32_t d = 2; d < inst->dest_count; d++)
+            buf_printf(&buf, "%s l %u", d > 2 ? "," : "", prog->dests[inst->dest_off + d]);
+        buf_puts(&buf, " }\n");
+    }
+    buf_puts(&buf, "\n");
+
     buf_puts(&buf, "# Run the program; returns the number of steps executed.\n");
     buf_puts(&buf, "export function l $bc_run(l %max_steps) {\n");
     buf_puts(&buf, "@entry\n");
@@ -308,6 +322,32 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
                 buf_printf(&buf, "@inst_%u_dm%u\n", i, e + 1);
             }
             buf_printf(&buf, "    jmp @inst_%u\n\n", exits[k - 1]);
+            break;
+        }
+
+        case IR_OPT_MULADD: {
+            // dests = [S, T, D_1..D_m]. One O(1) call to the runtime, mirroring
+            // the interpreter's IR_OPT_MULADD case (the D_i array is the data
+            // section emitted before $bc_run; m == 0 -> null pointer).
+            uint32_t S = prog->dests[inst->dest_off];
+            uint32_t T = prog->dests[inst->dest_off + 1];
+            uint32_t m = inst->dest_count - 2;
+            if (opts.emit_debug_info) {
+                buf_printf(&buf, "    # MULADD C=%s S=%s T=%s -> {",
+                           prog->reg_names[inst->reg]->data,
+                           prog->reg_names[S]->data, prog->reg_names[T]->data);
+                for (uint32_t d = 2; d < inst->dest_count; d++)
+                    buf_printf(&buf, "%s%s", d > 2 ? ", " : "",
+                               prog->reg_names[prog->dests[inst->dest_off + d]]->data);
+                buf_puts(&buf, "}\n");
+            }
+            buf_puts(&buf, "    call $bc_muladd(l $bc_regs, ");
+            buf_printf(&buf, "l %u, l %u, l %u, ", inst->reg, S, T);
+            if (m > 0)
+                buf_printf(&buf, "l $bc_muladd_d%u, l %u)\n", i, m);
+            else
+                buf_puts(&buf, "l 0, l 0)\n");
+            buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
             break;
         }
 

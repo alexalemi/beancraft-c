@@ -279,6 +279,94 @@ Bignum bignum_add(Bignum a, Bignum b) {
     return (Bignum)result;
 }
 
+Bignum bignum_mul(Bignum a, Bignum b) {
+    // 0 * x = x * 0 = 0
+    if (bignum_is_zero(a) || bignum_is_zero(b)) {
+        return bignum_zero();
+    }
+
+    // Fast path: both immediate.
+    if (LIKELY(bignum_is_immediate(a) && bignum_is_immediate(b))) {
+        uint64_t va = bignum_get_immediate(a);
+        uint64_t vb = bignum_get_immediate(b);
+
+        uint64_t prod;
+        if (!__builtin_mul_overflow(va, vb, &prod)) {
+            if (prod <= BIGNUM_MAX_IMMEDIATE) {
+                return bignum_make_immediate(prod);
+            }
+            // Fits in 64 bits but not in an immediate.
+            BigLimbs *limbs = limbs_alloc(2);
+            limbs->limbs[0] = prod;
+            limbs->len = 1;
+            return (Bignum)limbs;
+        }
+        // Overflows 64 bits: take the full 128-bit product.
+        __uint128_t wide = (__uint128_t)va * (__uint128_t)vb;
+        BigLimbs *limbs = limbs_alloc(2);
+        limbs->limbs[0] = (uint64_t)wide;
+        limbs->limbs[1] = (uint64_t)(wide >> 64);
+        limbs->len = (limbs->limbs[1] != 0) ? 2 : 1;
+        return (Bignum)limbs;
+    }
+
+    // General case: schoolbook limb multiply. View each operand as a base-2^64
+    // little-endian limb array (immediates become a single limb).
+    uint64_t a_inline[1], b_inline[1];
+    const uint64_t *a_limbs;
+    const uint64_t *b_limbs;
+    uint32_t a_len, b_len;
+
+    if (bignum_is_immediate(a)) {
+        a_inline[0] = bignum_get_immediate(a);
+        a_limbs = a_inline;
+        a_len = 1;
+    } else {
+        BigLimbs *al = bignum_get_ptr(a);
+        a_limbs = al->limbs;
+        a_len = al->len;
+    }
+
+    if (bignum_is_immediate(b)) {
+        b_inline[0] = bignum_get_immediate(b);
+        b_limbs = b_inline;
+        b_len = 1;
+    } else {
+        BigLimbs *bl = bignum_get_ptr(b);
+        b_limbs = bl->limbs;
+        b_len = bl->len;
+    }
+
+    // The product has at most a_len + b_len limbs.
+    uint32_t r_len = a_len + b_len;
+    BigLimbs *result = limbs_alloc(r_len);
+    for (uint32_t i = 0; i < r_len; i++) result->limbs[i] = 0;
+
+    for (uint32_t i = 0; i < a_len; i++) {
+        uint64_t carry = 0;
+        for (uint32_t j = 0; j < b_len; j++) {
+            // a[i]*b[j] + result[i+j] + carry  <=  (2^64-1)^2 + 2*(2^64-1) = 2^128-1,
+            // so the high half is a valid 64-bit carry.
+            __uint128_t cur = (__uint128_t)a_limbs[i] * (__uint128_t)b_limbs[j]
+                            + (__uint128_t)result->limbs[i + j]
+                            + (__uint128_t)carry;
+            result->limbs[i + j] = (uint64_t)cur;
+            carry = (uint64_t)(cur >> 64);
+        }
+        result->limbs[i + b_len] += carry;   // result[i+b_len] was still 0 here
+    }
+
+    // Normalize, then demote to an immediate if it now fits.
+    result->len = r_len;
+    while (result->len > 1 && result->limbs[result->len - 1] == 0) result->len--;
+    if (result->len == 1 && result->limbs[0] <= BIGNUM_MAX_IMMEDIATE) {
+        uint64_t v = result->limbs[0];
+        free(result);
+        return bignum_make_immediate(v);
+    }
+    return (Bignum)result;
+}
+
 bool bignum_add_into(Bignum *dst, Bignum src) {
     if (bignum_is_zero(src)) {
         return true;
