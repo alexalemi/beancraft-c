@@ -352,6 +352,17 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
             break;
         }
 
+        case IR_OPT_ISZERO:
+            // goto (regs[reg] == 0 ? arg_a : arg_b); reg unchanged.
+            // (a Bignum holding zero is the tagged word 1 -- see beancraft/bignum.h)
+            if (opts.emit_debug_info)
+                buf_printf(&buf, "    # IS_ZERO %s\n", prog->reg_names[inst->reg]->data);
+            emit_reg_ptr(&buf, "izp", inst->reg);
+            buf_puts(&buf, "    %izv =l loadl %izp\n");
+            buf_puts(&buf, "    %izc =w ceql %izv, 1\n");
+            buf_printf(&buf, "    jnz %%izc, @inst_%u, @inst_%u\n\n", inst->arg_a, inst->arg_b);
+            break;
+
         case IR_OPT_COPY:
             // The optimizer never emits COPY; if it ever does, fall through
             // harmlessly rather than miscompile.

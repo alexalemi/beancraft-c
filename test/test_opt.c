@@ -104,6 +104,13 @@ static void count_ops(const IrOptProgram *opt, int *muladd, int *transfer, int *
     if (zero) *zero = z;
 }
 
+// Count instructions of a given op in an optimized program.
+static int count_op(const IrOptProgram *opt, IrOptOp op) {
+    int n = 0;
+    for (uint32_t i = 0; i < opt->inst_count; i++) if (opt->insts[i].op == op) n++;
+    return n;
+}
+
 // Run `src` at the given opt level with the given register inits, then read back
 // the named registers into `out` (out[k] = value of names[k], as a uint64).
 static void run_with(const char *src, OptLevel level,
@@ -366,6 +373,79 @@ TEST(muladd_zero_counter_is_noop) {
 // The fold doesn't perturb other loop idioms
 // ============================================================
 
+// ============================================================
+// ISZERO pattern  (deb R z; inc R nz  ->  goto R==0 ? z : nz)
+// ============================================================
+
+// iszero.bc:  Zero := (N == 0 ? 1 : 0)   (N preserved -- the dec is undone)
+static const char *ISZERO_SRC =
+    "clr:   - Zero check self\n"      // Zero := 0
+    "check: - N setZero\n"             // \  N == 0 -> setZero ;  N > 0 -> N--, fall into the inc...
+    "       + N done\n"                // /  ... which undoes the dec, then -> done
+    "setZero: + Zero done\n";
+
+TEST(iszero_pattern_fires) {
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+    IrProgram *prog = lower(arena, strings, ISZERO_SRC);
+
+    // IR:  0 clr (deb Zero), 1 check (deb N), 2 inc N, 3 setZero (inc Zero), 4 end.
+    // Instruction 1 + 2 is the `deb N; inc N` ISZERO idiom.
+    Pattern p = ir_detect_pattern(prog, 1);
+    assert(p.type == PATTERN_ISZERO);
+    assert(strcmp(prog->reg_names[p.src_reg]->data, "N") == 0);
+
+    IrOptProgram *opt = ir_optimize(arena, prog, OPT_LOOPS);
+    assert(count_op(opt, IR_OPT_ISZERO) == 1);
+    assert(count_op(opt, IR_OPT_ZERO) == 1);     // the `clr`
+    assert(count_op(opt, IR_OPT_INC) == 1);      // the `+ Zero`
+    assert(count_op(opt, IR_OPT_DEB) == 0);      // no plain deb survives
+    arena_free(arena);
+}
+
+TEST(iszero_matches_unoptimized) {
+    static const char *inits[] = { "N" };
+    static const char *check[] = { "Zero", "N" };
+    uint64_t ns[] = { 0, 1, 2, 5, 100, 999 };
+    for (size_t i = 0; i < sizeof(ns)/sizeof(ns[0]); i++) {
+        uint64_t v[] = { ns[i] };
+        assert_opt_agrees(ISZERO_SRC, inits, v, 1, check, 2);
+        uint64_t out[2];
+        run_with(ISZERO_SRC, OPT_LOOPS, inits, v, 1, check, out, 2);
+        assert(out[0] == (ns[i] == 0 ? 1u : 0u));   // Zero
+        assert(out[1] == ns[i]);                     // N preserved (the dec is undone)
+    }
+}
+
+// ============================================================
+// Jump threading + dead-code elimination of no-op `deb R X X`
+// ============================================================
+
+TEST(threading_removes_noop_jumps) {
+    // `clr: - X done self` zeros X and jumps to the program's halt; the bare
+    // `loop:` on its own line lowers to a `deb :nil next next` no-op, and `.` is
+    // an explicit halt -- both become unreachable once the `clr` loop folds, so
+    // -O threads past the no-op and DCE leaves just `ZERO X ; END`.
+    static const char *SRC = "clr: - X done self\nloop:\n.\n";
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+
+    IrOptProgram *raw = ir_optimize(arena, lower(arena, strings, SRC), OPT_NONE);
+    IrOptProgram *opt = ir_optimize(arena, lower(arena, strings, SRC), OPT_LOOPS);
+
+    // OPT_NONE: a faithful lowering -- DEB X, DEB :nil (the no-op), END, END.
+    assert(raw->inst_count == 4);
+    assert(count_op(raw, IR_OPT_DEB) == 2);
+    // OPT_LOOPS: the deb-X loop folds to ZERO, threading skips the no-op, DCE
+    // drops it (and the now-unreachable explicit END).
+    assert(raw->inst_count > opt->inst_count);
+    assert(count_op(opt, IR_OPT_DEB) == 0);
+    assert(count_op(opt, IR_OPT_ZERO) == 1);
+    assert(opt->inst_count == 2);                 // ZERO X ; END
+
+    arena_free(arena);
+}
+
 TEST(transfer_and_zero_still_fold) {
     // A bare ZERO loop and a bare TRANSFER loop, neither of which is a MULADD.
     static const char *ZERO_SRC = "loop: - X done self\n";
@@ -402,6 +482,10 @@ int main(void) {
     RUN(muladd_accumulates_into_nonzero_and_zero_counter_is_noop);
     RUN(muladd_tmp_nonzero_at_entry);
     RUN(muladd_zero_counter_is_noop);
+
+    RUN(iszero_pattern_fires);
+    RUN(iszero_matches_unoptimized);
+    RUN(threading_removes_noop_jumps);
 
     RUN(transfer_and_zero_still_fold);
 

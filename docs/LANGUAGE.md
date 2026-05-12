@@ -262,7 +262,8 @@ $ ./beancraft file.bc [REG=VALUE ...] [options]
 - `--show-ir` — the lowered counter machine (after expansion, labels resolved to
   instruction indices). This is what actually runs.
 - `--show-opt` — the optimized IR (implies `-O`); shows which loops folded into
-  `ZERO` / `TRANSFER` / `DIVMOD` / `MULADD` ops.
+  `ZERO` / `TRANSFER` / `DIVMOD` / `MULADD` / `IS_ZERO` ops (and the no-op jumps
+  threading + dead-code elimination removed).
 - `-O` — run with those folds enabled (much faster for arithmetic-heavy code).
 - `-s N` — cap execution at N steps (default 10 million; a program that uses an
   I/O device runs uncapped unless you pass `-s`).

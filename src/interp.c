@@ -161,6 +161,11 @@ void interp_step(InterpState *state) {
         break;
     }
 
+    case IR_OPT_ISZERO:
+        // goto (regs[reg] == 0 ? arg_a : arg_b); reg unchanged.
+        state->pc = bignum_is_zero(state->regs[inst->reg]) ? inst->arg_a : inst->arg_b;
+        break;
+
     case IR_OPT_COPY:
     default:
         // Not emitted by the current optimizer; fall through harmlessly.

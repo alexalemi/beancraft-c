@@ -95,7 +95,10 @@ handful of loop idioms and folds each into one O(1) bignum operation:
 - **TRANSFER** — `deb A exit; inc D₁…Dₙ; jmp` ⟶ `Dᵢ += A; A := 0`
 - **DIVMOD** — `k` chained `deb R` plus an inc-run ⟶ `Qᵢ += R/k; goto exit[R mod k]; R := 0`
 - **MULADD** — the two-transfer multiply loop ⟶ `Dᵢ += C·S + (C−1)·T; S += T; T,C := 0`
+- **ISZERO** — `deb R z; inc R nz` (the "is R zero?" idiom) ⟶ `goto R==0 ? z : nz` (R unchanged)
 
+It also threads no-op jumps (`deb R X X`, which a bare `label:` and `use`/`func`
+inlining produce a lot of) and dead-code-eliminates what that leaves behind.
 Both the interpreter and the QBE backend use the folded form, so `-O` speeds up
 interpretation as well as compilation. `examples/urm.bc` (a universal register
 machine that runs another beancraft program — and its registers — supplied as a

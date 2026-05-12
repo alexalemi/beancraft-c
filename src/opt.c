@@ -226,6 +226,31 @@ static Pattern detect_muladd_pattern(const IrProgram *prog, uint32_t start) {
     return p;
 }
 
+// ISZERO:  deb R z; inc R nz       (the "is R zero?" idiom: if R is zero we jump
+//   to z with R still 0; if not, the deb decrements and the inc immediately
+//   undoes it, leaving R unchanged, then we go to nz)
+//   ->  goto (R == 0 ? z : nz)     -- R unchanged
+static Pattern detect_iszero_pattern(const IrProgram *prog, uint32_t start) {
+    Pattern p = { .type = PATTERN_NONE };
+    if (!is_deb(prog, start) || !is_inc(prog, start + 1)) return p;
+    const IrInst *deb = &prog->insts[start];
+    const IrInst *inc = &prog->insts[start + 1];
+    if (deb->reg != inc->reg) return p;        // must inc the register the deb just dec'd
+    if (deb->arg_b != start + 1) return p;     // the deb's non-zero branch must fall into the inc
+
+    uint32_t end_inst = start + 2;
+    uint32_t exits[2] = { deb->arg_a, inc->arg_a };
+    if (!body_is_private(prog, start, end_inst, exits, 2)) return p;
+
+    p.type = PATTERN_ISZERO;
+    p.start_inst = start;
+    p.end_inst = end_inst;
+    p.src_reg = deb->reg;
+    p.exit_inst = deb->arg_a;    // R == 0
+    p.exit_inst2 = inc->arg_a;   // R != 0
+    return p;
+}
+
 Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
     Pattern p = detect_muladd_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
@@ -233,7 +258,173 @@ Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
     if (p.type != PATTERN_NONE) return p;
     p = detect_divmod_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
+    p = detect_iszero_pattern(prog, start);
+    if (p.type != PATTERN_NONE) return p;
     return detect_zero_pattern(prog, start);
+}
+
+// ---------------------------------------------------------------------------
+// Jump threading
+// ---------------------------------------------------------------------------
+//
+// `urm.bc` (and any heavily func/use-using program) is full of "no-op" jumps:
+// a bare `label:` lowers to `deb :nil next next`, and `use`/`func` inlining
+// brackets each body with two more such no-ops. `deb R X X` goes to X whatever
+// R holds, so it's a pure jump that just burns one interpreter step. Jump
+// threading rewrites every instruction's targets to skip past chains of those,
+// leaving the no-ops unreachable (and free at run time -- we keep them in the
+// array; nothing jumps to them any more).
+//
+// (We deliberately do NOT treat `deb z A B` with `z` "never incremented" as a
+// pure jump: any named register can be set from the command line, so the
+// optimizer can't assume z stays 0.)
+
+// Is opt instruction `i` a pure unconditional jump (no register effect, no
+// device side effect)? If so, store its target. `is_dev[r]` flags device regs.
+static bool opt_is_pure_jump(const IrOptProgram *opt, const bool *is_dev,
+                             uint32_t i, uint32_t *target) {
+    const IrOptInst *in = &opt->insts[i];
+    if (in->op == IR_OPT_DEB && in->arg_a == in->arg_b && !is_dev[in->reg]) {
+        *target = in->arg_a;
+        return true;
+    }
+    return false;
+}
+
+// Follow the chain of pure jumps starting at `t`; return the ultimate target.
+static uint32_t opt_thread_target(const IrOptProgram *opt, const bool *is_dev, uint32_t t) {
+    for (uint32_t hops = 0; hops < opt->inst_count; hops++) {
+        if (t >= opt->inst_count) break;
+        uint32_t next;
+        if (!opt_is_pure_jump(opt, is_dev, t, &next)) break;
+        if (next == t) break;   // a self-loop (an actual infinite loop in the program); leave it
+        t = next;
+    }
+    return t;
+}
+
+// Rewrite every jump target through chains of pure jumps.
+static void ir_thread_jumps(IrOptProgram *opt, const bool *is_dev) {
+    for (uint32_t i = 0; i < opt->inst_count; i++) {
+        IrOptInst *inst = &opt->insts[i];
+        switch (inst->op) {
+        case IR_OPT_DEB:
+        case IR_OPT_ISZERO:
+            inst->arg_b = opt_thread_target(opt, is_dev, inst->arg_b);
+            /* fall through */
+        case IR_OPT_INC:
+        case IR_OPT_ZERO:
+        case IR_OPT_TRANSFER:
+        case IR_OPT_MULADD:
+        case IR_OPT_COPY:
+            inst->arg_a = opt_thread_target(opt, is_dev, inst->arg_a);
+            break;
+        case IR_OPT_DIVMOD: {
+            uint32_t *exits = &opt->dests[inst->dest_off + inst->dest_count];
+            for (uint32_t e = 0; e < inst->arg_b; e++)
+                exits[e] = opt_thread_target(opt, is_dev, exits[e]);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dead-code elimination
+// ---------------------------------------------------------------------------
+//
+// After jump threading the no-op `deb R X X` instructions (and any other code
+// the folds made unreachable) have no predecessors except, possibly, themselves.
+// Drop everything not reachable from instruction 0 and renumber. (DIVMOD's
+// per-remainder exit indices, which live in the `dests` pool, are renumbered
+// too; the unused tail of that pool is left as-is.)
+
+// The jump-target instruction indices of opt instruction `i`, into `out[]`.
+static uint32_t opt_targets(const IrOptProgram *opt, uint32_t i, uint32_t *out) {
+    const IrOptInst *in = &opt->insts[i];
+    uint32_t n = 0;
+    switch (in->op) {
+    case IR_OPT_DEB:
+    case IR_OPT_ISZERO:
+        out[n++] = in->arg_b;
+        out[n++] = in->arg_a;
+        break;
+    case IR_OPT_INC:
+    case IR_OPT_ZERO:
+    case IR_OPT_TRANSFER:
+    case IR_OPT_MULADD:
+    case IR_OPT_COPY:
+        out[n++] = in->arg_a;
+        break;
+    case IR_OPT_DIVMOD: {
+        const uint32_t *exits = &opt->dests[in->dest_off + in->dest_count];
+        for (uint32_t e = 0; e < in->arg_b && n < IR_OPT_MAX_DESTS; e++) out[n++] = exits[e];
+        break;
+    }
+    default:   // END has no successor
+        break;
+    }
+    return n;
+}
+
+static void ir_remove_dead(IrOptProgram *opt) {
+    if (opt->inst_count == 0) return;
+
+    bool *reachable = arena_alloc_zero(opt->arena, opt->inst_count * sizeof(bool));
+    reachable[0] = true;
+    for (bool changed = true; changed; ) {
+        changed = false;
+        for (uint32_t i = 0; i < opt->inst_count; i++) {
+            if (!reachable[i]) continue;
+            uint32_t tgts[1 + IR_OPT_MAX_DESTS];
+            uint32_t nt = opt_targets(opt, i, tgts);
+            for (uint32_t k = 0; k < nt; k++) {
+                if (tgts[k] < opt->inst_count && !reachable[tgts[k]]) {
+                    reachable[tgts[k]] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    uint32_t *map = arena_alloc(opt->arena, opt->inst_count * sizeof(uint32_t));
+    IrOptInst *kept = arena_alloc(opt->arena, opt->inst_count * sizeof(IrOptInst));
+    uint32_t new_count = 0;
+    for (uint32_t i = 0; i < opt->inst_count; i++) {
+        map[i] = new_count;
+        if (reachable[i]) kept[new_count++] = opt->insts[i];
+    }
+    if (new_count == opt->inst_count) return;   // nothing to drop
+    opt->instructions_removed += opt->inst_count - new_count;
+
+    for (uint32_t i = 0; i < new_count; i++) {
+        IrOptInst *inst = &kept[i];
+        switch (inst->op) {
+        case IR_OPT_DEB:
+        case IR_OPT_ISZERO:
+            if (inst->arg_b < opt->inst_count) inst->arg_b = map[inst->arg_b];
+            /* fall through */
+        case IR_OPT_INC:
+        case IR_OPT_ZERO:
+        case IR_OPT_TRANSFER:
+        case IR_OPT_MULADD:
+        case IR_OPT_COPY:
+            if (inst->arg_a < opt->inst_count) inst->arg_a = map[inst->arg_a];
+            break;
+        case IR_OPT_DIVMOD: {
+            uint32_t *exits = &opt->dests[inst->dest_off + inst->dest_count];
+            for (uint32_t e = 0; e < inst->arg_b; e++)
+                if (exits[e] < opt->inst_count) exits[e] = map[exits[e]];
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    opt->insts = kept;
+    opt->inst_count = new_count;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +498,8 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
     uint32_t *inst_map = arena_alloc_zero(arena, prog->inst_count * sizeof(uint32_t));
     bool *consumed = arena_alloc_zero(arena, prog->inst_count * sizeof(bool));
 
-    // A device register has side effects on inc/deb; never fold a loop over one.
+    // A device register has side effects on inc/deb; never fold a loop over one
+    // (and never thread a `deb` of one away as a no-op).
     bool *is_dev = arena_alloc_zero(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(bool));
     for (uint32_t r = 0; r < prog->reg_count; r++) is_dev[r] = device_name_is_known(prog->reg_names[r]->data);
 
@@ -373,6 +565,12 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
                 for (uint32_t d = 0; d < p->dst_count; d++)
                     opt->dests[opt->dest_total++] = p->dst_regs[d];
                 break;
+            case PATTERN_ISZERO:
+                out.op = IR_OPT_ISZERO;
+                out.reg = p->src_reg;
+                out.arg_a = p->exit_inst;          // R == 0   (remapped in pass 3)
+                out.arg_b = p->exit_inst2;         // R != 0   (remapped in pass 3)
+                break;
             default:
                 break;
             }
@@ -389,6 +587,7 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
         IrOptInst *inst = &opt->insts[i];
         switch (inst->op) {
         case IR_OPT_DEB:
+        case IR_OPT_ISZERO:
             if (inst->arg_b < prog->inst_count) inst->arg_b = inst_map[inst->arg_b];
             /* fall through */
         case IR_OPT_INC:
@@ -409,6 +608,12 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
             break;
         }
     }
+
+    // Pass 4: thread every jump target past chains of no-op `deb R X X` jumps.
+    ir_thread_jumps(opt, is_dev);
+
+    // Pass 5: drop the now-unreachable no-ops (and any other dead code) and renumber.
+    ir_remove_dead(opt);
 
     return opt;
 }
@@ -468,6 +673,10 @@ void ir_opt_print(const IrOptProgram *prog) {
                    inst->arg_b ? "" : " + (C-1)*T", inst->arg_a);
             break;
         }
+        case IR_OPT_ISZERO:
+            printf("IS_ZERO %s -> zero:%u nonzero:%u\n",
+                   prog->reg_names[inst->reg]->data, inst->arg_a, inst->arg_b);
+            break;
         case IR_OPT_COPY:
             printf("COPY %s -> ... (not implemented)\n", prog->reg_names[inst->reg]->data);
             break;

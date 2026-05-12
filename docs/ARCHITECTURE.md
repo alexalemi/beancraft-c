@@ -105,9 +105,9 @@ This `IrProgram` is the actual counter machine. `--show-ir` prints it.
 ## Stage 4 — the optimizer: `ir_optimize`
 
 `src/opt.c` produces an `IrOptProgram` (`include/beancraft/opt.h`). The extended
-instruction set adds, on top of `INC`/`DEB`/`END`, four O(1) folds: `ZERO`,
-`TRANSFER`, `DIVMOD`, `MULADD`. An `IrOptInst` carries `reg`, `arg_a`, `arg_b`,
-and `dest_off`/`dest_count` indexing a packed `dests[]` pool that holds
+instruction set adds, on top of `INC`/`DEB`/`END`, five O(1) folds: `ZERO`,
+`TRANSFER`, `DIVMOD`, `MULADD`, `ISZERO`. An `IrOptInst` carries `reg`, `arg_a`,
+`arg_b`, and `dest_off`/`dest_count` indexing a packed `dests[]` pool that holds
 TRANSFER's destination registers / DIVMOD's quotient registers + per-remainder
 exit indices / MULADD's `[S, T, D₁…Dₘ]`.
 
@@ -115,23 +115,34 @@ At **`OPT_NONE`** (no `-O`): a faithful 1:1 lowering — each `IrInst` becomes t
 corresponding `IR_OPT_INC`/`IR_OPT_DEB`/`IR_OPT_END`. (This is why `--show-ir`
 and `--show-opt` look the same without `-O`.)
 
-At **`OPT_LOOPS`** (`-O` / `--show-opt`), three passes:
+At **`OPT_LOOPS`** (`-O` / `--show-opt`), five passes:
 
 1. **Detect.** For each not-yet-consumed instruction `i`, `ir_detect_pattern`
    tries, in order, `detect_muladd_pattern` → `detect_transfer_pattern` →
-   `detect_divmod_pattern` → `detect_zero_pattern`. A match that doesn't touch a
-   device register (those have side effects on `inc`/`deb`, so their loops are
-   left alone) is recorded and the instructions it covers, `[start, end)`, are
-   marked consumed. Helpers: `is_deb`/`is_inc` (op check), `collect_inc_run`
-   (a contiguous `inc`-chain looping back to a given instruction), and
-   `body_is_private` (no jump from *outside* the loop lands in its interior, and
-   no exit target points strictly inside it — both would dangle once folded).
+   `detect_divmod_pattern` → `detect_iszero_pattern` → `detect_zero_pattern`. A
+   match that doesn't touch a device register (those have side effects on
+   `inc`/`deb`, so their loops are left alone) is recorded and the instructions
+   it covers, `[start, end)`, are marked consumed. Helpers: `is_deb`/`is_inc`
+   (op check), `collect_inc_run` (a contiguous `inc`-chain looping back to a
+   given instruction), and `body_is_private` (no jump from *outside* the matched
+   range lands in its interior, and no exit target points strictly inside it —
+   both would dangle once folded).
 2. **Emit.** Walk the instructions; at a pattern's `start` emit the folded
    `IrOptInst` (packing its dest registers / exit indices into `dests[]`),
    recording `inst_map[old] = new`; for non-consumed instructions, copy 1:1.
 3. **Remap.** Rewrite jump targets through `inst_map`. DIVMOD's per-remainder
    exit indices live in the `dests[]` pool and are remapped there; TRANSFER/MULADD
    dests are *register* indices and are left alone.
+4. **Thread.** `deb R X X` goes to `X` whatever `R` holds — a pure no-op jump
+   (bare `label:` lines lower to `deb :nil next next`, and `use`/`func` inlining
+   brackets each body with two more). Rewrite every jump target to skip past
+   chains of those. (Devices are excluded — a `deb` of a device-poll register has
+   a side effect; and `deb z A B` with `z` "never incremented" is *not* treated
+   as a no-op, since any named register can be set from the command line.)
+5. **DCE.** After threading the no-ops have no predecessors except themselves;
+   compute reachability from instruction 0, drop everything unreachable, and
+   renumber (`urm.bc` shrinks ~25%). This makes `--show-opt` honest and the QBE
+   output smaller; it doesn't change runtime (dead code never executed).
 
 ### The patterns
 
@@ -141,6 +152,7 @@ At **`OPT_LOOPS`** (`-O` / `--show-opt`), three passes:
 | **TRANSFER** | `deb A exit; inc D₁; …; inc Dₙ; jmp deb` | `Dᵢ += A; A := 0; goto exit` |
 | **DIVMOD** | `deb R e₀; deb R e₁; …; deb R e_{k-1}; inc Q₁; …; inc Qₘ; jmp deb`  (k ≥ 2, m ≥ 0) | `Qᵢ += ⌊R/k⌋;  goto e_{R mod k};  R := 0` |
 | **MULADD** | `deb C exit; [deb T self;] deb S tx; inc D₁…Dₘ; inc T (→deb S); deb T (→deb C); inc S (→deb T)` | `if C≠0: Dᵢ += C·S + (C−1)·T;  S += T;  T := 0;  C := 0;  goto exit` |
+| **ISZERO** | `deb R z; inc R nz`  (the deb's non-zero branch falls into the inc, which undoes the decrement) | `goto (R == 0 ? z : nz)`  — R unchanged |
 
 MULADD is the multiply idiom — `for C { [T:=0;] TRANSFER S→{D…,T}; TRANSFER T→{S} }`
 — so `Out = A*B` stops being O(A·B). Constraints: the loop body is one contiguous

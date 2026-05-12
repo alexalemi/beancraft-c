@@ -33,6 +33,7 @@ typedef enum {
                           //   goto arg_a    (the unrolled `for C { TRANSFER S->{D..,T}; TRANSFER T->{S} }`)
                           //   arg_b != 0: the loop body also began with `reg[T] = 0` each round,
                           //   so reg[T] is provably 0 -- the (C-1)*reg[T] and reg[S]+=reg[T] terms drop.
+    IR_OPT_ISZERO,        // goto (reg[REG] == 0 ? arg_a : arg_b)   -- REG is left unchanged
     IR_OPT_COPY,          // reserved (non-destructive copy); not emitted yet
 } IrOptOp;
 
@@ -51,7 +52,7 @@ typedef struct {
     uint32_t dest_off;    // TRANSFER/DIVMOD: start offset into IrOptProgram.dests
     uint32_t dest_count;  // TRANSFER/DIVMOD: number of destination registers
     uint32_t arg_a;       // jump target / zero branch
-    uint32_t arg_b;       // DEB: non-zero branch.  DIVMOD: the divisor K.
+    uint32_t arg_b;       // DEB/ISZERO: non-zero branch.  DIVMOD: the divisor K.
 } IrOptInst;
 
 // Optimized program
@@ -90,6 +91,8 @@ typedef enum {
                           //   -> Di += C*S + (C-1)*T;  S += T;  T = 0;  C = 0;  goto exit
                           //   (the optional leading `deb T self` is a per-round `T := 0`; when
                           //    present, T is provably 0 and the (C-1)*T / S+=T terms vanish)
+    PATTERN_ISZERO,       // deb R z; inc R nz   (deb's non-zero branch falls into the inc, which
+                          //   undoes the decrement)  ->  goto (R == 0 ? z : nz)   -- R unchanged
 } PatternType;
 
 // Detected pattern info
@@ -97,8 +100,9 @@ typedef struct {
     PatternType type;
     uint32_t start_inst;  // first instruction of the pattern
     uint32_t end_inst;    // one past the last instruction of the pattern
-    uint32_t src_reg;     // source / cleared / dividend / MULADD-counter register
-    uint32_t exit_inst;   // TRANSFER/ZERO/MULADD: where to continue afterwards
+    uint32_t src_reg;     // source / cleared / dividend / MULADD-counter / tested register
+    uint32_t exit_inst;   // TRANSFER/ZERO/MULADD: continuation;  ISZERO: the zero branch
+    uint32_t exit_inst2;  // ISZERO: the non-zero branch
     uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: inc/quotient targets; MULADD: [S, T, D_1..D_m]
     uint32_t dst_count;
     uint32_t div_k;                       // DIVMOD: the divisor
