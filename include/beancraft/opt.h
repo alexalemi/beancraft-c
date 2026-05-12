@@ -31,6 +31,8 @@ typedef enum {
                           //   if C != 0: for d in D_i: reg[d] += C*reg[S] + (C-1)*reg[T];
                           //              reg[S] += reg[T];  reg[T] = 0;  reg[C] = 0;
                           //   goto arg_a    (the unrolled `for C { TRANSFER S->{D..,T}; TRANSFER T->{S} }`)
+                          //   arg_b != 0: the loop body also began with `reg[T] = 0` each round,
+                          //   so reg[T] is provably 0 -- the (C-1)*reg[T] and reg[S]+=reg[T] terms drop.
     IR_OPT_COPY,          // reserved (non-destructive copy); not emitted yet
 } IrOptOp;
 
@@ -83,9 +85,11 @@ typedef enum {
     PATTERN_TRANSFER,     // deb A exit; inc D1..Dn; jmp deb        -> Di += A; A = 0; goto exit
     PATTERN_DIVMOD,       // deb R e0; .. deb R e(k-1); inc Q1..Qm; jmp deb
                           //   -> Qi += R/k;  goto e_(R mod k);  R = 0    (k >= 2)
-    PATTERN_MULADD,       // deb C exit (->next); deb S txexit (->next); inc D1..Dm; inc T (->deb S);
-                          //   deb T (->deb C) (->next); inc S (->deb T)
+    PATTERN_MULADD,       // deb C exit (->next); [deb T self (->next);] deb S txexit (->next);
+                          //   inc D1..Dm; inc T (->deb S);  deb T (->deb C) (->next); inc S (->deb T)
                           //   -> Di += C*S + (C-1)*T;  S += T;  T = 0;  C = 0;  goto exit
+                          //   (the optional leading `deb T self` is a per-round `T := 0`; when
+                          //    present, T is provably 0 and the (C-1)*T / S+=T terms vanish)
 } PatternType;
 
 // Detected pattern info
@@ -99,6 +103,7 @@ typedef struct {
     uint32_t dst_count;
     uint32_t div_k;                       // DIVMOD: the divisor
     uint32_t exit_insts[IR_OPT_MAX_DESTS];// DIVMOD: continuation per remainder 0..div_k-1
+    bool muladd_preclear;                 // MULADD: loop body started with `T := 0` each round
 } Pattern;
 
 // Optimize an IR program. Returns a new optimized program; the original is

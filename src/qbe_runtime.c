@@ -43,27 +43,35 @@ uint64_t bc_divmod(Bignum *reg, uint64_t k) {
     return bignum_divmod_small(reg, k);
 }
 
-// The folded multiply loop `for C { TRANSFER S->{D_1..D_m, T}; TRANSFER T->{S} }`.
+// The folded multiply loop `for C { [T := 0;] TRANSFER S->{D_1..D_m, T}; TRANSFER T->{S} }`.
 // `regs` is the register file; c/s/t are register indices; `dests` holds the m
 // accumulator indices (may be NULL when m == 0). After C >= 1 iterations:
 //   D_i += C*S + (C-1)*T   (using the initial S, T);  S := S + T;  T := 0;  C := 0.
-// C == 0 is a no-op. None of {C, S, T, D_i} alias (the optimizer guarantees it).
+// When `preclear` is set the body re-zeroed T each round, so T is provably 0 and
+// the (C-1)*T term -- and the `S += T` -- drop out. C == 0 is a no-op. None of
+// {C, S, T, D_i} alias (the optimizer guarantees it).
 void bc_muladd(Bignum *regs, uint64_t c, uint64_t s, uint64_t t,
-               const uint64_t *dests, uint64_t m) {
+               const uint64_t *dests, uint64_t m, uint64_t preclear) {
     if (bignum_is_zero(regs[c])) return;
-    Bignum Cm1 = bignum_clone(regs[c]);
-    bignum_dec(&Cm1);                          // C - 1 (C >= 1)
-    Bignum cS   = bignum_mul(regs[s], regs[c]);  // C * S
-    Bignum cm1T = bignum_mul(regs[t], Cm1);     // (C-1) * T
-    Bignum addend = bignum_add(cS, cm1T);
+    Bignum addend;
+    if (preclear) {
+        bignum_set_zero(&regs[t]);              // matches the in-body `T := 0`
+        addend = bignum_mul(regs[s], regs[c]);  // C * S
+    } else {
+        Bignum Cm1 = bignum_clone(regs[c]);
+        bignum_dec(&Cm1);                       // C - 1 (C >= 1)
+        Bignum cS   = bignum_mul(regs[s], regs[c]);  // C * S
+        Bignum cm1T = bignum_mul(regs[t], Cm1);  // (C-1) * T
+        addend = bignum_add(cS, cm1T);
+        bignum_add_into(&regs[s], regs[t]);     // S += T (T untouched so far)
+        bignum_free(&Cm1);
+        bignum_free(&cS);
+        bignum_free(&cm1T);
+    }
     for (uint64_t i = 0; i < m; i++)
         bignum_add_into(&regs[dests[i]], addend);
-    bignum_add_into(&regs[s], regs[t]);        // S += T (T untouched so far)
-    bignum_set_zero(&regs[t]);                  // T := 0
+    bignum_set_zero(&regs[t]);                  // T := 0 (no-op if precleared)
     bignum_set_zero(&regs[c]);                  // C := 0
-    bignum_free(&Cm1);
-    bignum_free(&cS);
-    bignum_free(&cm1T);
     bignum_free(&addend);
 }
 

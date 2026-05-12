@@ -147,12 +147,14 @@ static Pattern detect_divmod_pattern(const IrProgram *prog, uint32_t start) {
     return p;
 }
 
-// MULADD:  the `for C { TRANSFER S->{D_1..D_m, T}; TRANSFER T->{S} }` idiom, i.e.
-//   deb C exit (->start+1); deb S txexit (->start+2); inc D_1..D_m; inc T (->start+1);
-//   deb T start (->txexit+1); inc S (->txexit)
+// MULADD:  the `for C { [T := 0;] TRANSFER S->{D_1..D_m, T}; TRANSFER T->{S} }` idiom:
+//   deb C exit (->start+1); [deb T self (->S0);] deb S tx_exit (->S0+1);
+//   inc D_1..D_m; inc T (->deb S); deb T start (->tx_exit+1); inc S (->tx_exit)
 //   ->  D_i += C*S + (C-1)*T;  S += T;  T := 0;  C := 0;  goto exit      (no-op when C == 0)
-// (the `(C-1)*T` term covers the case where T is nonzero at loop entry; for `mul.bc`
-//  T is zeroed beforehand so it reduces to D_i += C*S, with S preserved.)
+// The `(C-1)*T` term covers a nonzero temp at loop entry; for `mul.bc` T is zeroed
+// beforehand so it reduces to D_i += C*S with S preserved.  When the loop body
+// itself begins with `T := 0` each round (the optional `deb T self`), T is provably
+// 0 and that term -- and the `S += T` -- vanish; `muladd_preclear` records this.
 static Pattern detect_muladd_pattern(const IrProgram *prog, uint32_t start) {
     Pattern p = { .type = PATTERN_NONE };
 
@@ -163,19 +165,27 @@ static Pattern detect_muladd_pattern(const IrProgram *prog, uint32_t start) {
     uint32_t C = deb_c->reg;
     uint32_t exit_inst = deb_c->arg_a;
 
-    // [start+1] deb S  ? tx_exit : start+2
+    // [start+1] is either `deb T self` (a per-round `T := 0`, arg_b loops here) or
+    // already the `deb S` of the first transfer (arg_b enters the inc chain).
     if (!is_deb(prog, start + 1)) return p;
-    const IrInst *deb_s = &prog->insts[start + 1];
-    if (deb_s->arg_b != start + 2) return p;
+    bool preclear = (prog->insts[start + 1].arg_b == start + 1);
+    uint32_t s0 = preclear ? start + 2 : start + 1;       // index of `deb S`
+    if (preclear && prog->insts[start + 1].arg_a != s0) return p;   // ZERO must fall through to deb S
+
+    // [s0] deb S  ? tx_exit : s0+1
+    if (!is_deb(prog, s0)) return p;
+    const IrInst *deb_s = &prog->insts[s0];
+    if (deb_s->arg_b != s0 + 1) return p;
     uint32_t S = deb_s->reg;
     uint32_t tx_exit = deb_s->arg_a;
 
-    // [start+2 ..] inc D_1; ...; inc D_m; inc T  (last one loops back to deb S)
+    // [s0+1 ..] inc D_1; ...; inc D_m; inc T  (last one loops back to deb S)
     uint32_t regs[IR_OPT_MAX_DESTS];
-    uint32_t n = collect_inc_run(prog, start + 2, start + 1, S, regs);
+    uint32_t n = collect_inc_run(prog, s0 + 1, s0, S, regs);
     if (n == 0) return p;                       // need at least the temp T
-    if (tx_exit != start + 2 + n) return p;     // the whole loop body must be one contiguous block
+    if (tx_exit != s0 + 1 + n) return p;        // the whole loop body must be one contiguous block
     uint32_t T = regs[n - 1];                   // last inc is the temp; the first m = n-1 are accumulators
+    if (preclear && prog->insts[start + 1].reg != T) return p;   // the leading ZERO must clear T
 
     // [tx_exit] deb T  ? start : tx_exit+1     (the "restore S from T" transfer, looping back to deb C)
     if (!is_deb(prog, tx_exit)) return p;
@@ -212,6 +222,7 @@ static Pattern detect_muladd_pattern(const IrProgram *prog, uint32_t start) {
     p.dst_regs[1] = T;
     for (uint32_t i = 0; i + 1 < n; i++) p.dst_regs[2 + i] = regs[i];   // D_1..D_m
     p.dst_count = n + 1;
+    p.muladd_preclear = preclear;
     return p;
 }
 
@@ -356,6 +367,7 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
                 out.op = IR_OPT_MULADD;
                 out.reg = p->src_reg;              // the counter C
                 out.arg_a = p->exit_inst;          // remapped in pass 3
+                out.arg_b = p->muladd_preclear ? 1 : 0;   // body began with `T := 0` each round
                 out.dest_off = opt->dest_total;
                 out.dest_count = p->dst_count;     // [S, T, D_1..D_m]
                 for (uint32_t d = 0; d < p->dst_count; d++)
@@ -452,7 +464,8 @@ void ir_opt_print(const IrOptProgram *prog) {
                    prog->reg_names[S]->data, prog->reg_names[T]->data);
             for (uint32_t d = inst->dest_off + 2; d < inst->dest_off + inst->dest_count; d++)
                 printf("%s%s", d > inst->dest_off + 2 ? ", " : "", prog->reg_names[prog->dests[d]]->data);
-            printf("} (each += C*S + (C-1)*T), then %u\n", inst->arg_a);
+            printf("} (each += C*S%s), then %u\n",
+                   inst->arg_b ? "" : " + (C-1)*T", inst->arg_a);
             break;
         }
         case IR_OPT_COPY:

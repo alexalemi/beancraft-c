@@ -69,9 +69,10 @@ static const char *MUL_ACC_IS_COUNTER_SRC =
     "+ A prev\n";
 
 // for B { tmp := 0; Out += A; tmp += A; A := 0; A += tmp } -- the leading
-// `tmp := 0` in the body means insts[start+1] is a ZERO (deb tmp self), not the
-// `deb S` MULADD expects, so the fold declines but the ZERO + two TRANSFERs fold.
-static const char *MUL_ZERO_IN_BODY_SRC =
+// `tmp := 0` makes this the "preclear" MULADD variant: tmp is provably 0 at the
+// top of each round, so the result is just Out += B*A with A preserved (no junk
+// from a nonzero tmp at loop entry can leak in).
+static const char *MUL_PRECLEAR_SRC =
     "loop: - B done\n"
     "clrT: - tmp addA self\n"
     "addA: - A restoreA\n"
@@ -193,22 +194,57 @@ TEST(muladd_declines_when_accumulator_is_counter) {
     arena_free(arena);
 }
 
-TEST(muladd_declines_with_zero_in_loop_body) {
+TEST(muladd_preclear_variant_fires) {
     Arena *arena = arena_new(1 << 16);
     StrPool *strings = strpool_new(arena);
-    IrProgram *prog = lower(arena, strings, MUL_ZERO_IN_BODY_SRC);
+    IrProgram *prog = lower(arena, strings, MUL_PRECLEAR_SRC);
 
+    // The `deb B` is instruction 0; the body's leading `deb tmp self` is the
+    // per-round `tmp := 0`, so this is the preclear MULADD shape.
     Pattern p = ir_detect_pattern(prog, 0);
-    assert(p.type != PATTERN_MULADD);   // insts[start+1] is a ZERO, not `deb S`
+    assert(p.type == PATTERN_MULADD);
+    assert(p.muladd_preclear);
+    assert(strcmp(prog->reg_names[p.src_reg]->data, "B") == 0);
+    assert(p.dst_count == 3);
+    assert(strcmp(prog->reg_names[p.dst_regs[0]]->data, "A") == 0);   // S
+    assert(strcmp(prog->reg_names[p.dst_regs[1]]->data, "tmp") == 0); // T
+    assert(strcmp(prog->reg_names[p.dst_regs[2]]->data, "Out") == 0); // D_1
 
     IrOptProgram *opt = ir_optimize(arena, prog, OPT_LOOPS);
     int ma, tx, z;
     count_ops(opt, &ma, &tx, &z);
-    assert(ma == 0);
-    assert(tx == 2);   // TRANSFER S->{Out,tmp} and TRANSFER tmp->{A}
-    assert(z == 1);    // the in-body `tmp := 0`
-
+    assert(ma == 1);   // the whole loop, including the in-body ZERO, folds to one MULADD
+    assert(tx == 0);
+    assert(z == 0);
     arena_free(arena);
+}
+
+TEST(muladd_preclear_matches_unoptimized) {
+    static const char *inits[] = { "A", "B", "tmp", "Out" };
+    static const char *check[] = { "Out", "A", "B", "tmp" };
+    struct { uint64_t a, b, tmp0, out0; } cases[] = {
+        { 7, 8, 0, 0 },     // Out := 56
+        { 7, 8, 99, 0 },    // tmp's junk is wiped each round -> still Out := 56, A := 7
+        { 0, 5, 3, 0 },     // Out := 0
+        { 5, 0, 4, 0 },     // B == 0: nothing runs, tmp stays 4
+        { 9, 6, 1, 10 },    // Out := 10 + 6*9 = 64;  A := 9
+        { 1, 1, 7, 2 },     // Out := 2 + 1 = 3;  A := 1
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        uint64_t v[] = { cases[i].a, cases[i].b, cases[i].tmp0, cases[i].out0 };
+        assert_opt_agrees(MUL_PRECLEAR_SRC, inits, v, 4, check, 4);
+        uint64_t out[4];
+        run_with(MUL_PRECLEAR_SRC, OPT_LOOPS, inits, v, 4, check, out, 4);
+        if (cases[i].b == 0) {
+            assert(out[0] == cases[i].out0);
+            assert(out[1] == cases[i].a);
+            assert(out[3] == cases[i].tmp0);   // tmp untouched (loop never runs)
+        } else {
+            assert(out[0] == cases[i].out0 + cases[i].b * cases[i].a);  // no (B-1)*tmp term
+            assert(out[1] == cases[i].a);                                // A preserved (A += 0)
+            assert(out[3] == 0);
+        }
+    }
 }
 
 TEST(muladd_not_at_opt_none) {
@@ -357,11 +393,12 @@ int main(void) {
     printf("Running optimizer tests:\n");
 
     RUN(muladd_fires_on_mul_shape);
+    RUN(muladd_preclear_variant_fires);
     RUN(muladd_declines_when_accumulator_is_counter);
-    RUN(muladd_declines_with_zero_in_loop_body);
     RUN(muladd_not_at_opt_none);
 
     RUN(muladd_matches_unoptimized);
+    RUN(muladd_preclear_matches_unoptimized);
     RUN(muladd_accumulates_into_nonzero_and_zero_counter_is_noop);
     RUN(muladd_tmp_nonzero_at_entry);
     RUN(muladd_zero_counter_is_noop);

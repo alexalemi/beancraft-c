@@ -344,9 +344,10 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
             buf_puts(&buf, "    call $bc_muladd(l $bc_regs, ");
             buf_printf(&buf, "l %u, l %u, l %u, ", inst->reg, S, T);
             if (m > 0)
-                buf_printf(&buf, "l $bc_muladd_d%u, l %u)\n", i, m);
+                buf_printf(&buf, "l $bc_muladd_d%u, l %u, ", i, m);
             else
-                buf_puts(&buf, "l 0, l 0)\n");
+                buf_puts(&buf, "l 0, l 0, ");
+            buf_printf(&buf, "l %u)\n", inst->arg_b ? 1u : 0u);   // T precleared each round?
             buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
             break;
         }
