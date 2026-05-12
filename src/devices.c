@@ -28,8 +28,8 @@ enum DevOp {
     DEV_RAND_NEXT, DEV_RAND_SETSEED,
     DEV_PAL_SET,
     DEV_SCR_PLOT, DEV_SCR_CLEAR, DEV_SCR_FLUSH,
-    DEV_SCR_SPRITE, DEV_SCR_RECT, DEV_SCR_TEXT,
-    DEV_INC_LAST = DEV_SCR_TEXT,
+    DEV_SCR_SPRITE, DEV_SCR_RECT, DEV_SCR_TEXT, DEV_SCR_SAMPLE,
+    DEV_INC_LAST = DEV_SCR_SAMPLE,
     // deb-polls (`deb R` lets the device refresh its registers first)
     DEV_CON_READ, DEV_KBD_EVENT, DEV_MOUSE_EVENT,
     DEV_POLL_LAST = DEV_MOUSE_EVENT,
@@ -69,6 +69,8 @@ static const struct { const char *name; int op; } MAGIC[] = {
     { "screen/rect",  DEV_SCR_RECT     },
     { "screen/glyph", DEV_DATA },
     { "screen/text",  DEV_SCR_TEXT     },
+    { "screen/pixel", DEV_DATA },
+    { "screen/sample", DEV_SCR_SAMPLE  },
     { "kbd/event",    DEV_KBD_EVENT    },
     { "kbd/char",     DEV_DATA }, { "kbd/code", DEV_DATA },
     { "mouse/event",  DEV_MOUSE_EVENT  },
@@ -103,6 +105,7 @@ static const char *const DEP_SPRITE[] = { "screen/x", "screen/y", "screen/color"
     "screen/row4", "screen/row5", "screen/row6", "screen/row7" };
 static const char *const DEP_RECT[]  = { "screen/x", "screen/y", "screen/color", "screen/rectw", "screen/recth" };
 static const char *const DEP_TEXT[]  = { "screen/x", "screen/y", "screen/color", "screen/glyph" };
+static const char *const DEP_SAMPLE[] = { "screen/x", "screen/y", "screen/pixel" };
 
 const char *const *device_dependencies(const char *name, uint32_t *count) {
     switch (magic_op(name)) {
@@ -116,6 +119,7 @@ const char *const *device_dependencies(const char *name, uint32_t *count) {
     case DEV_SCR_SPRITE:   *count = 11; return DEP_SPRITE;
     case DEV_SCR_RECT:     *count = 5; return DEP_RECT;
     case DEV_SCR_TEXT:     *count = 4; return DEP_TEXT;
+    case DEV_SCR_SAMPLE:   *count = 3; return DEP_SAMPLE;
     case DEV_KBD_EVENT:    *count = 2; return DEP_KBD;
     case DEV_MOUSE_EVENT:  *count = 3; return DEP_MOUSE;
     case DEV_SCR_CLEAR: case DEV_SCR_FLUSH: *count = 2; return DEP_SCRSZ;
@@ -141,7 +145,7 @@ static struct {
     int i_rand_byte, i_rand_seed;
     int i_pal_index, i_pal_r, i_pal_g, i_pal_b;
     int i_scr_x, i_scr_y, i_scr_color, i_scr_w, i_scr_h;
-    int i_scr_row[8], i_scr_rectw, i_scr_recth, i_scr_glyph;
+    int i_scr_row[8], i_scr_rectw, i_scr_recth, i_scr_glyph, i_scr_pixel;
     int i_kbd_char, i_kbd_code;
     int i_mouse_x, i_mouse_y, i_mouse_buttons;
 
@@ -179,7 +183,7 @@ static struct {
     .i_rand_byte = -1, .i_rand_seed = -1,
     .i_pal_index = -1, .i_pal_r = -1, .i_pal_g = -1, .i_pal_b = -1,
     .i_scr_x = -1, .i_scr_y = -1, .i_scr_color = -1, .i_scr_w = -1, .i_scr_h = -1,
-    .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1,
+    .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1, .i_scr_pixel = -1,
     .i_kbd_char = -1, .i_kbd_code = -1,
     .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,
 };
@@ -468,6 +472,7 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         else if (!strcmp(nm, "screen/rectw"))   D.i_scr_rectw = (int)i;
         else if (!strcmp(nm, "screen/recth"))   D.i_scr_recth = (int)i;
         else if (!strcmp(nm, "screen/glyph"))   D.i_scr_glyph = (int)i;
+        else if (!strcmp(nm, "screen/pixel"))   D.i_scr_pixel = (int)i;
         else if (!strcmp(nm, "kbd/char"))       D.i_kbd_char = (int)i;
         else if (!strcmp(nm, "kbd/code"))       D.i_kbd_code = (int)i;
         else if (!strcmp(nm, "mouse/x"))        D.i_mouse_x = (int)i;
@@ -641,6 +646,18 @@ void device_on_inc(uint32_t i) {
                     rows, (uint8_t)reg_mod(D.i_scr_color, 256));
         if (D.i_scr_x >= 0) bignum_add_into(&D.regs[D.i_scr_x], bignum_from_u64(8));  // advance for the next glyph
         if (D.i_scr_glyph >= 0) bignum_set_zero(&D.regs[D.i_scr_glyph]);              // consume the glyph
+        break;
+    }
+
+    case DEV_SCR_SAMPLE: {
+        // read back the colour of the pixel at (screen/x, screen/y) into screen/pixel
+        uint64_t v = 0;
+        if (D.fb) {
+            uint64_t x = reg_mod(D.i_scr_x, D.scr_w ? D.scr_w : 1);
+            uint64_t y = reg_mod(D.i_scr_y, D.scr_h ? D.scr_h : 1);
+            v = D.fb[y * D.scr_w + x];
+        }
+        set_reg(D.i_scr_pixel, v);
         break;
     }
 

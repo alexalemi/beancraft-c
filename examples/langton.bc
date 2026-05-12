@@ -1,0 +1,110 @@
+# Langton's ant.  An "ant" walks a grid of black/white cells: on a white cell it
+# turns right, paints the cell black, and steps forward; on a black cell it turns
+# left, paints the cell white, and steps forward.  From a blank board it makes a
+# chaotic blob for about ten thousand steps and then -- abruptly -- builds a
+# diagonal "highway" and runs off to infinity.  The grid here is the whole screen
+# and wraps at the edges, so the highway eventually re-enters the blob.  Press any
+# key to quit.  (Much snappier compiled: `bccompile -O examples/langton.bc`.)
+#
+# This is the demo `screen/sample` was added for: the ant's turn depends on the
+# colour already on the screen, so it has to read the framebuffer back.
+
+func clear X { - X done self }                     # X := 0
+
+func copy From To {                                # To := From   (From preserved)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func addn N R {                                    # R += N   (N is a value, consumed)
+  l: - N done
+  + R l
+}
+
+func subn N R {                                    # R := max(0, R - N)   (N consumed)
+  l: - N done
+  - R l l
+}
+
+func mod4 R {                                      # R := R mod 4
+  m0: - R done m1
+  m1: - R e1 m2
+  m2: - R e2 m3
+  m3: - R e3 m4
+  m4: - z m0
+  e1: + R done
+  e2: + R e2b
+  e2b: + R done
+  e3: + R e3b
+  e3b: + R e3c
+  e3c: + R done
+}
+
+# --- init: blank board; ant at (0,0) facing north (0=N, 1=E, 2=S, 3=W) ---
+# mirrors axr = W-1-ax, ayr = H-1-ay let the ant wrap at the edges with no compares
+inc screen/clear
+copy screen/width axr
+subn 1 axr
+copy screen/height ayr
+subn 1 ayr
+
+# --- run 100 ant steps per displayed frame ---
+frame:
+  clear burst
+  addn 100 burst
+bl: - burst doFlush bk
+bk:
+  copy ax screen/x
+  copy ay screen/y
+  inc screen/sample                                # screen/pixel := colour at (ax, ay)
+  - screen/pixel onBlack onWhite
+onWhite:                                            # on a white cell: turn right, paint black, step
+  clear screen/color
+  inc screen/plot                                   # cell := 0
+  + dir
+  mod4 dir
+  - z move
+onBlack:                                            # on a black cell: turn left, paint white, step
+  clear screen/color
+  addn 15 screen/color
+  inc screen/plot                                   # cell := 15 (white)
+  addn 3 dir
+  mod4 dir
+move:
+  copy dir dtmp
+  - dtmp mvN dN1
+dN1: - dtmp mvE dN2
+dN2: - dtmp mvS mvW
+mvN:   - ay wrapN goN                                # north: ay--, ayr++   (wrap when ay==0)
+goN:   + ayr stepDone
+wrapN: copy screen/height ay
+       subn 1 ay
+       clear ayr
+       - z stepDone
+mvE:   - axr wrapE goE                               # east: ax++, axr--   (wrap when axr==0)
+goE:   + ax stepDone
+wrapE: clear ax
+       copy screen/width axr
+       subn 1 axr
+       - z stepDone
+mvS:   - ayr wrapS goS                               # south: ay++, ayr--   (wrap when ayr==0)
+goS:   + ay stepDone
+wrapS: clear ay
+       copy screen/height ayr
+       subn 1 ayr
+       - z stepDone
+mvW:   - ax wrapW goW                                # west: ax--, axr++   (wrap when ax==0)
+goW:   + axr stepDone
+wrapW: copy screen/width ax
+       subn 1 ax
+       clear axr
+stepDone: - z bl
+doFlush:
+  inc screen/flush
+  deb kbd/event frame quit
+quit:
