@@ -283,11 +283,13 @@ int main(int argc, char *argv[]) {
         } else {
             qbe_result = qbe_generate(stdout, prog, opts);
         }
-        arena_free(arena);
+        // Print before freeing: the error message is arena-allocated.
         if (!qbe_result.ok) {
             bc_error_print(&qbe_result.error);
+            arena_free(arena);
             return 1;
         }
+        arena_free(arena);
         return 0;
     }
 

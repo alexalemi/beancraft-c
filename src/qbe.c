@@ -77,14 +77,17 @@ static void emit_header(QbeBuffer *buf, uint32_t reg_count, bool optimized) {
                (unsigned)(reg_count * 8));
 }
 
-// Begin the @inst_<i> basic block: bump the step counter and bail to @exit if
-// it reached the limit, otherwise fall through to @inst_<i>_body.
+// Begin the @inst_<i> basic block: bail to @exit if the step counter already
+// reached the limit, otherwise bump it and fall through to @inst_<i>_body.
+// Check-then-increment keeps %steps equal to the number of instructions
+// actually executed, matching the interpreter (which runs the instruction,
+// increments, and loops while steps < max_steps).
 static void emit_step_check(QbeBuffer *buf, uint32_t i) {
     buf_printf(buf, "@inst_%u\n", i);
-    buf_puts(buf, "    %steps =l add %steps, 1\n");
     buf_puts(buf, "    %limit_check =w cugel %steps, %max_steps\n");
     buf_printf(buf, "    jnz %%limit_check, @exit, @inst_%u_body\n", i);
     buf_printf(buf, "@inst_%u_body\n", i);
+    buf_puts(buf, "    %steps =l add %steps, 1\n");
 }
 
 // Compute %ptr = &bc_regs[reg].
@@ -385,57 +388,3 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
     return BC_OK(NULL);
 }
 
-BcResult qbe_generate_string(char **out, const IrProgram *prog, QbeOptions opts) {
-    char *buf = NULL;
-    size_t size = 0;
-    FILE *stream = open_memstream(&buf, &size);
-    if (!stream) {
-        *out = NULL;
-        return BC_OK(NULL);
-    }
-
-    BcResult result = qbe_generate(stream, prog, opts);
-    fclose(stream);
-
-    if (result.ok) {
-        *out = buf;
-    } else {
-        free(buf);
-        *out = NULL;
-    }
-    return result;
-}
-
-int qbe_compile(const char *qbe_source, const char *output_path) {
-    char temp_path[] = "/tmp/beancraft_XXXXXX.ssa";
-    int fd = mkstemps(temp_path, 4);
-    if (fd < 0) return -1;
-
-    FILE *f = fdopen(fd, "w");
-    if (!f) {
-        close(fd);
-        return -1;
-    }
-    fputs(qbe_source, f);
-    fclose(f);
-
-    char asm_path[256];
-    snprintf(asm_path, sizeof(asm_path), "%s.s", output_path);
-
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "qbe -o %s %s", asm_path, temp_path);
-    int ret = system(cmd);
-    unlink(temp_path);
-    if (ret != 0) return -1;
-
-    snprintf(cmd, sizeof(cmd), "cc -c -o %s %s", output_path, asm_path);
-    ret = system(cmd);
-    unlink(asm_path);
-    return ret == 0 ? 0 : -1;
-}
-
-int qbe_link(const char *object_path, const char *output_path) {
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "cc -o %s %s -L. -lbcruntime", output_path, object_path);
-    return system(cmd) == 0 ? 0 : -1;
-}
