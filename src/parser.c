@@ -182,6 +182,10 @@ static bool parse_use(Parser *p, AstNode *node) {
 
             if (check(p, TOK_NUMBER)) {
                 advance(p);
+                if (p->previous.number < 0) {
+                    error(p, "register value must be non-negative");
+                    return false;
+                }
                 rm->is_value = true;
                 rm->value = p->previous.number;
             } else if (check(p, TOK_IDENT) || token_is_keyword(p->current.kind)) {
@@ -247,7 +251,10 @@ static bool parse_call(Parser *p, AstNode *node, Str *name, uint32_t line, uint3
     uint32_t n = 0;
     while (check(p, TOK_IDENT) || token_is_keyword(p->current.kind) || check(p, TOK_NUMBER)) {
         if (n >= 64) { error(p, "too many call arguments"); return false; }
-        if (check(p, TOK_NUMBER)) { args[n] = NULL; vals[n] = p->current.number; }
+        if (check(p, TOK_NUMBER)) {
+            if (p->current.number < 0) { error(p, "call argument value must be non-negative"); return false; }
+            args[n] = NULL; vals[n] = p->current.number;
+        }
         else { args[n] = p->current.str; vals[n] = 0; }
         n++;
         advance(p);

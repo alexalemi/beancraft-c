@@ -183,6 +183,17 @@ static Str *apply_label_mapping(const InlineCtx *ic, Str *label) {
     return make_scoped_name(ic->strings, ic->scope, label);
 }
 
+// Rename a nested call/use argument that may be either a register or a label
+// (positional call args don't say which; the callee's signature decides). A
+// label bound by this body's label mappings must come first -- otherwise a
+// forwarded label parameter would be scoped into a nonexistent name.
+static Str *apply_arg_mapping(const InlineCtx *ic, Str *arg) {
+    for (uint32_t i = 0; i < ic->lmap_count; i++) {
+        if (ic->lmaps[i].local == arg) return ic->lmaps[i].import;
+    }
+    return apply_reg_mapping(ic, arg);
+}
+
 // Rewrite a jump target inside the inlined body: labels are renamed, done/halt
 // become a jump to the return point, and init becomes a jump to the entry point.
 static Jump transform_jump(const InlineCtx *ic, Jump jump) {
@@ -225,9 +236,28 @@ static void clone_and_transform_node(Ast *dest, const AstNode *src, const Inline
         break;
 
     case AST_USE:
-        // Nested use -- copy as-is (expanded in a later pass); just re-scope it.
+        // Nested use -- expanded in a later pass. Re-scope it, and rename its
+        // mapping imports: they name registers/labels of *this* body, which are
+        // being renamed right now (a parameter goes to its caller binding,
+        // anything else to its private scoped name).
         node->use = src->use;
         if (src->use.scope) node->use.scope = make_scoped_name(ic->strings, ic->scope, src->use.scope);
+        if (src->use.reg_mapping_count > 0) {
+            RegMapping *rm = arena_alloc(dest->arena, src->use.reg_mapping_count * sizeof(RegMapping));
+            for (uint32_t i = 0; i < src->use.reg_mapping_count; i++) {
+                rm[i] = src->use.reg_mappings[i];
+                if (!rm[i].is_value) rm[i].import = apply_reg_mapping(ic, rm[i].import);
+            }
+            node->use.reg_mappings = rm;
+        }
+        if (src->use.label_mapping_count > 0) {
+            LabelMapping *lm = arena_alloc(dest->arena, src->use.label_mapping_count * sizeof(LabelMapping));
+            for (uint32_t i = 0; i < src->use.label_mapping_count; i++) {
+                lm[i].local = src->use.label_mappings[i].local;
+                lm[i].import = apply_label_mapping(ic, src->use.label_mappings[i].import);
+            }
+            node->use.label_mappings = lm;
+        }
         break;
 
     case AST_CALL: {
@@ -239,7 +269,7 @@ static void clone_and_transform_node(Ast *dest, const AstNode *src, const Inline
             node->call.arg_values = arena_alloc(dest->arena, src->call.arg_count * sizeof(int64_t));
             for (uint32_t i = 0; i < src->call.arg_count; i++) {
                 node->call.arg_values[i] = src->call.arg_values[i];
-                node->call.args[i] = src->call.args[i] ? apply_reg_mapping(ic, src->call.args[i]) : NULL;
+                node->call.args[i] = src->call.args[i] ? apply_arg_mapping(ic, src->call.args[i]) : NULL;
             }
         } else {
             node->call.args = NULL;
@@ -249,8 +279,13 @@ static void clone_and_transform_node(Ast *dest, const AstNode *src, const Inline
     }
 
     case AST_FUNCDEF:
-        // Functions are top-level only; a body shouldn't contain one. Drop it.
-        node->kind = AST_END;
+        // Unreachable: expand_module_body skips FUNCDEFs before cloning. If one
+        // ever slipped through, AST_END would inject a *return* mid-body, so
+        // emit a no-op instead.
+        node->kind = AST_DEB;
+        node->deb.reg = str_intern_cstr(ic->strings, ":nil");
+        node->deb.jump = jump_keyword(KW_NEXT);
+        node->deb.next = jump_keyword(KW_NEXT);
         break;
     }
 }
@@ -300,14 +335,9 @@ static void expand_module_body(LoaderContext *ctx, Ast *dest,
                                const LabelMapping *lmaps, uint32_t lmap_count,
                                const char *scope, Str *my_label, uint32_t line,
                                const char *base_dir) {
-    char buf[96];
     Str *entry_label = my_label;
-    if (!entry_label) {
-        snprintf(buf, sizeof(buf), "%s/entry", scope);
-        entry_label = str_intern_cstr(ctx->strings, buf);
-    }
-    snprintf(buf, sizeof(buf), "%s/return", scope);
-    Str *return_label = str_intern_cstr(ctx->strings, buf);
+    if (!entry_label) entry_label = str_internf(ctx->strings, "%s/entry", scope);
+    Str *return_label = str_internf(ctx->strings, "%s/return", scope);
 
     InlineCtx ic = {
         .strings = ctx->strings,
@@ -322,9 +352,11 @@ static void expand_module_body(LoaderContext *ctx, Ast *dest,
     // `my_label` -- not the program's instruction 0.
     add_nop_label(ctx, dest, entry_label, line);
 
-    // Seed value-mapped registers: scoped L := N every time control enters here.
+    // Seed value-mapped registers: scoped L := N every time control enters
+    // here. The clearing loop runs even for N = 0 -- "L=0" means "reset to 0
+    // on entry", not "leave whatever the last entry left behind".
     for (uint32_t i = 0; i < rmap_count; i++) {
-        if (!rmaps[i].is_value || rmaps[i].value <= 0) continue;
+        if (!rmaps[i].is_value) continue;
         Str *r = make_scoped_name(ctx->strings, scope, rmaps[i].local);
 
         AstNode *clr = ast_add_node(dest);
@@ -396,18 +428,17 @@ static BcResult expand_use(LoaderContext *ctx, Ast *dest,
         ctx->funcs = e;
     }
 
-    char scope_buf[64];
-    if (use_node->use.scope) {
-        snprintf(scope_buf, sizeof(scope_buf), "%s", use_node->use.scope->data);
-    } else {
-        snprintf(scope_buf, sizeof(scope_buf), "%s-%u",
-                 use_node->use.filename->data, use_index);
-    }
+    // Scope names must never truncate: nested `use` filenames are rewritten to
+    // absolute paths, and losing the unique "-N" suffix would silently merge
+    // distinct inclusions (colliding labels, wrong jumps).
+    Str *scope = use_node->use.scope
+        ? use_node->use.scope
+        : str_internf(ctx->strings, "%s-%u", use_node->use.filename->data, use_index);
 
     expand_module_body(ctx, dest, module_ast->nodes, module_ast->node_count,
                        use_node->use.reg_mappings, use_node->use.reg_mapping_count,
                        use_node->use.label_mappings, use_node->use.label_mapping_count,
-                       scope_buf, use_node->label, use_node->line, dir);
+                       scope->data, use_node->label, use_node->line, dir);
     free(module_dir);
     return BC_OK(NULL);
 }
@@ -462,11 +493,10 @@ static BcResult expand_call(LoaderContext *ctx, Ast *dest,
         }
     }
 
-    char scope_buf[64];
-    snprintf(scope_buf, sizeof(scope_buf), "%s-%u", call_node->call.name->data, call_index);
+    Str *scope = str_internf(ctx->strings, "%s-%u", call_node->call.name->data, call_index);
 
     expand_module_body(ctx, dest, def->funcdef.body, def->funcdef.body_count,
-                       rmaps, rn, lmaps, ln, scope_buf,
+                       rmaps, rn, lmaps, ln, scope->data,
                        call_node->label, call_node->line, NULL);
     return BC_OK(NULL);
 }
