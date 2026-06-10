@@ -192,6 +192,30 @@ TEST(missing_module_is_error) {
     free(dir);
 }
 
+TEST(runaway_expansion_is_error) {
+    // Mutually-calling funcs multiply the AST every expansion round; the node
+    // cap must fire (cleanly) before memory does. Found by the fuzzer.
+    expect_error(NULL,
+                 "func a { b }\n"
+                 "func b {\n"
+                 "a\n"
+                 "a\n"
+                 "a\n"
+                 "a\n"
+                 "}\n"
+                 "a\n",
+                 "expands to more than");
+}
+
+TEST(oversized_value_seed_is_error) {
+    // A value seed of N emits N inc instructions; huge seeds must error
+    // instead of exhausting memory.
+    char *dir = make_tmpdir();
+    write_module(dir, "mod.bc", "+ x\n");
+    expect_error(dir, "use \"mod\" x=99999999\n", "too large");
+    free(dir);
+}
+
 // --- jump-offset semantics ---------------------------------------------------
 
 TEST(past_the_end_offset_halts) {
@@ -216,6 +240,8 @@ int main(void) {
     RUN(negative_value_mapping_is_error);
     RUN(huge_literal_is_lexer_error);
     RUN(missing_module_is_error);
+    RUN(runaway_expansion_is_error);
+    RUN(oversized_value_seed_is_error);
 
     RUN(past_the_end_offset_halts);
 

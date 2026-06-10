@@ -324,17 +324,26 @@ static void add_nop_label(LoaderContext *ctx, Ast *dest, Str *label,
     node->deb.next = jump_keyword(KW_NEXT);
 }
 
+// Everything is inlined, so expansion size must be bounded: a value seed of N
+// emits N `inc` nodes, and mutually-calling funcs multiply the AST every
+// expansion round (exponential growth that exhausts memory long before the
+// depth limit fires). Both caps produce a clean error instead.
+// (1 << 17 = 131072 -- two hundred times the biggest in-tree example, while
+// keeping even an adversarial 32-deep expansion's arena in the hundreds of MB.)
+#define MAX_SEED_VALUE      (1 << 17)
+#define MAX_EXPANDED_NODES  (1u << 17)
+
 // Inline a module / func body into `dest`, surrounded by entry and return
 // no-ops. `body`/`body_count` is the body's statements; `rmaps`/`lmaps` bind its
 // registers/labels; `scope` namespaces everything private; `my_label`, if
 // non-NULL, is placed on the entry no-op (so callers can jump to the inlining
 // site); `base_dir`, if non-NULL, is used to resolve nested `use` paths.
-static void expand_module_body(LoaderContext *ctx, Ast *dest,
-                               const AstNode *body, uint32_t body_count,
-                               const RegMapping *rmaps, uint32_t rmap_count,
-                               const LabelMapping *lmaps, uint32_t lmap_count,
-                               const char *scope, Str *my_label, uint32_t line,
-                               const char *base_dir) {
+static BcResult expand_module_body(LoaderContext *ctx, Ast *dest,
+                                   const AstNode *body, uint32_t body_count,
+                                   const RegMapping *rmaps, uint32_t rmap_count,
+                                   const LabelMapping *lmaps, uint32_t lmap_count,
+                                   const char *scope, Str *my_label, uint32_t line,
+                                   const char *base_dir) {
     Str *entry_label = my_label;
     if (!entry_label) entry_label = str_internf(ctx->strings, "%s/entry", scope);
     Str *return_label = str_internf(ctx->strings, "%s/return", scope);
@@ -357,6 +366,14 @@ static void expand_module_body(LoaderContext *ctx, Ast *dest,
     // on entry", not "leave whatever the last entry left behind".
     for (uint32_t i = 0; i < rmap_count; i++) {
         if (!rmaps[i].is_value) continue;
+        if (rmaps[i].value > MAX_SEED_VALUE) {
+            return bc_err(ctx->arena, BC_ERR_SEMANTIC, NULL, line, 0,
+                         "value seed %s=%lld too large (each unit emits an "
+                         "instruction; the limit is %d -- set the register "
+                         "from the command line instead)",
+                         rmaps[i].local->data, (long long)rmaps[i].value,
+                         MAX_SEED_VALUE);
+        }
         Str *r = make_scoped_name(ctx->strings, scope, rmaps[i].local);
 
         AstNode *clr = ast_add_node(dest);
@@ -396,6 +413,13 @@ static void expand_module_body(LoaderContext *ctx, Ast *dest,
 
     // Return no-op: target of done/halt and the body's own END.
     add_nop_label(ctx, dest, return_label, line);
+
+    if (dest->node_count > MAX_EXPANDED_NODES) {
+        return bc_err(ctx->arena, BC_ERR_SEMANTIC, NULL, line, 0,
+                     "program expands to more than %u statements "
+                     "(runaway use/func expansion?)", MAX_EXPANDED_NODES);
+    }
+    return BC_OK(NULL);
 }
 
 // Expand a `use "file"` statement into `dest`.
@@ -435,12 +459,12 @@ static BcResult expand_use(LoaderContext *ctx, Ast *dest,
         ? use_node->use.scope
         : str_internf(ctx->strings, "%s-%u", use_node->use.filename->data, use_index);
 
-    expand_module_body(ctx, dest, module_ast->nodes, module_ast->node_count,
+    BcResult res = expand_module_body(ctx, dest, module_ast->nodes, module_ast->node_count,
                        use_node->use.reg_mappings, use_node->use.reg_mapping_count,
                        use_node->use.label_mappings, use_node->use.label_mapping_count,
                        scope->data, use_node->label, use_node->line, dir);
     free(module_dir);
-    return BC_OK(NULL);
+    return res;
 }
 
 // Find a registered `func` by name (interned-pointer compare).
@@ -495,10 +519,9 @@ static BcResult expand_call(LoaderContext *ctx, Ast *dest,
 
     Str *scope = str_internf(ctx->strings, "%s-%u", call_node->call.name->data, call_index);
 
-    expand_module_body(ctx, dest, def->funcdef.body, def->funcdef.body_count,
-                       rmaps, rn, lmaps, ln, scope->data,
-                       call_node->label, call_node->line, NULL);
-    return BC_OK(NULL);
+    return expand_module_body(ctx, dest, def->funcdef.body, def->funcdef.body_count,
+                              rmaps, rn, lmaps, ln, scope->data,
+                              call_node->label, call_node->line, NULL);
 }
 
 BcResult loader_expand(LoaderContext *ctx, Ast *ast) {

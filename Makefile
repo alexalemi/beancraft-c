@@ -61,7 +61,7 @@ $(BUILDDIR)/sdl/%.o: $(SRCDIR)/%.c
 -include $(DEPS)
 
 # Test targets (built with the debug/sanitizer configuration)
-TEST_SRCS = $(wildcard $(TESTDIR)/*.c)
+TEST_SRCS = $(wildcard $(TESTDIR)/test_*.c)
 TEST_BINS = $(patsubst $(TESTDIR)/%.c,$(BUILDDIR)/debug/%,$(TEST_SRCS))
 
 test: $(TEST_BINS) $(TARGET)
@@ -71,6 +71,22 @@ test: $(TEST_BINS) $(TARGET)
 $(BUILDDIR)/debug/test_%: $(TESTDIR)/test_%.c $(TEST_LIB_OBJS)
 	@mkdir -p $(@D)
 	$(CC) $(DEBUG_CFLAGS) $(DEBUG_LDFLAGS) -I include -o $@ $^
+
+# Differential fuzzer (libFuzzer; needs clang). Fuzzes the whole pipeline --
+# parse -> expand -> lower -> optimize -> interpret at -O0 and -O -- and
+# aborts on any crash, sanitizer hit, or -O0/-O register disagreement.
+# Seeds the corpus from examples/ on first run.
+FUZZ_CC = clang
+FUZZ_SRCS = $(filter-out $(SRCDIR)/main.c,$(SRCS))
+
+fuzz: $(TESTDIR)/fuzz_pipeline.c $(FUZZ_SRCS)
+	@mkdir -p $(BUILDDIR) $(BUILDDIR)/fuzz-corpus
+	@cp -n examples/*.bc $(BUILDDIR)/fuzz-corpus/ 2>/dev/null || true
+	$(FUZZ_CC) -g -O1 -fsanitize=fuzzer,address,undefined -I include \
+	  -o $(BUILDDIR)/fuzz_pipeline $(TESTDIR)/fuzz_pipeline.c $(FUZZ_SRCS)
+	@echo "Run:  $(BUILDDIR)/fuzz_pipeline $(BUILDDIR)/fuzz-corpus -max_len=4096"
+
+.PHONY: fuzz
 
 clean:
 	rm -rf $(BUILDDIR) $(TARGET) libbcruntime.a web/beancraft.mjs web/beancraft.wasm

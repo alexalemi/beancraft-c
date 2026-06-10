@@ -204,13 +204,14 @@ static BcResult resolve_jump(Arena *arena, const Jump *jump, uint32_t current_ad
         break;
 
     case JUMP_OFFSET: {
-        int32_t target = (int32_t)current_addr + jump->offset;
+        // 64-bit arithmetic: an offset near INT32_MAX must clamp, not overflow.
+        int64_t target = (int64_t)current_addr + jump->offset;
         if (target < 0) target = 0;
         // A past-the-end offset means halt. Clamp to the implicit trailing END
         // so every backend agrees: the interpreter treated pc >= inst_count as
         // a silent halt, but the QBE backend emitted jumps to nonexistent
         // blocks and the optimizer had to bounds-check on its own.
-        if ((uint32_t)target >= inst_count) target = (int32_t)inst_count - 1;
+        if (target >= (int64_t)inst_count) target = (int64_t)inst_count - 1;
         return BC_OK((void *)(uintptr_t)target);
     }
     }
