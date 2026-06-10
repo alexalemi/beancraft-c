@@ -41,6 +41,7 @@
   }
   button:disabled { opacity: .5; cursor: default; }
   button:not(:disabled):hover { filter: brightness(1.08); }
+  button.stop { background: var(--err); color: #2a1210; }
   .status { color: var(--dim); margin-left: .5rem; font-size: .9rem; }
   .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
   @media (max-width: 620px) { .panes { grid-template-columns: 1fr; } }
@@ -85,6 +86,7 @@
     <label for="steps">Max steps</label>
     <input type="number" id="steps" value="10000000" min="1" step="1000000">
     <button id="run" disabled>Run</button>
+    <button id="stop" class="stop" disabled>Stop</button>
     <span class="status" id="status">loading WebAssembly…</span>
   </div>
 
@@ -109,7 +111,9 @@
     in beancraft can't run client-side, so this is the interpreter only. Programs that
     draw via <code>screen/*</code> animate live on the canvas above — every
     <code>inc screen/flush</code> paints a frame and yields — and while a run is live,
-    your keyboard feeds <code>kbd/event</code>. Runs end at halt or the step cap.
+    your keyboard feeds <code>kbd/event</code>. Runs end at halt, the step cap, or
+    the Stop button (the run yields between work chunks, so even a tight compute
+    loop stays interruptible).
   </footer>
 </main>
 
@@ -266,8 +270,8 @@ inc con/emit
 
 const $ = (id) => document.getElementById(id);
 const exampleSel = $("example"), srcEl = $("src"), argsEl = $("args"),
-      stepsEl = $("steps"), runBtn = $("run"), statusEl = $("status"),
-      outEl = $("out"), resEl = $("result");
+      stepsEl = $("steps"), runBtn = $("run"), stopBtn = $("stop"),
+      statusEl = $("status"), outEl = $("out"), resEl = $("result");
 
 for (const name of Object.keys(EXAMPLES)) {
   const o = document.createElement("option");
@@ -300,6 +304,7 @@ const bc_fb_width   = Module.cwrap("bc_fb_width", "number", []);
 const bc_fb_height  = Module.cwrap("bc_fb_height", "number", []);
 const bc_fb_rgba    = Module.cwrap("bc_fb_rgba", "number", []);
 const bc_push_key   = Module.cwrap("bc_push_key", null, ["number", "number"]);
+const bc_request_stop = Module.cwrap("bc_request_stop", null, []);
 
 // Blit a palette-indexed framebuffer (fb: w*h bytes, pal: 256 x 0xRRGGBB) onto
 // the canvas. Views are taken fresh each call: memory growth invalidates them.
@@ -365,6 +370,7 @@ runBtn.disabled = false;
 async function run() {
   if (running) return;
   runBtn.disabled = true;
+  stopBtn.disabled = false;
   running = true;
   statusEl.textContent = "running… (keys go to kbd/event)";
   outEl.classList.remove("err"); resEl.classList.remove("err");
@@ -380,6 +386,7 @@ async function run() {
     try { result = Module.UTF8ToString(ptr); } finally { if (ptr) bc_free(ptr); }
   } finally {
     running = false;
+    stopBtn.disabled = true;
   }
   const ms = (performance.now() - t0).toFixed(1);
 
@@ -391,6 +398,7 @@ async function run() {
   runBtn.disabled = false;
 }
 runBtn.addEventListener("click", run);
+stopBtn.addEventListener("click", () => { if (running) bc_request_stop(); });
 // Ctrl/Cmd+Enter from the textarea runs.
 srcEl.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }

@@ -21,6 +21,9 @@ typedef struct {
     bool halted;               // Whether program has halted
     const bool *inc_mask;      // inc_mask[r] => `inc r` is a device trigger (NULL if no devices)
     const bool *deb_mask;      // deb_mask[r] => `deb r` is a device poll
+    const volatile bool *stop_flag;  // optional host abort flag, checked each step
+                                     // (set e.g. by the wasm Stop button while the
+                                     // run is suspended in a device yield)
 } InterpState;
 
 // Create interpreter state from an optimized IR program

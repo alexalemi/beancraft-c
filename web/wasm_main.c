@@ -25,6 +25,7 @@
 #include <emscripten/emscripten.h>
 #else
 #define EMSCRIPTEN_KEEPALIVE
+#define emscripten_sleep(ms) ((void)0)
 #endif
 
 #define BC_DEFAULT_MAX_STEPS 100000000ULL
@@ -66,6 +67,15 @@ uint8_t *EMSCRIPTEN_KEEPALIVE bc_fb_rgba(void)   { return g_fb_rgba; }
 // calls this while a run is suspended in the screen/flush Asyncify yield.
 void EMSCRIPTEN_KEEPALIVE bc_push_key(int ch, int code) {
     device_push_key((uint8_t)ch, (uint8_t)code);
+}
+
+// The Stop button. The flag can only be set while the run is suspended in an
+// Asyncify yield -- either a screen/flush or the periodic between-chunk yield
+// in bc_run_source -- which is exactly when the click handler gets to run.
+static volatile bool g_stop_requested = false;
+
+void EMSCRIPTEN_KEEPALIVE bc_request_stop(void) {
+    g_stop_requested = true;
 }
 
 static void snapshot_screen(void) {
@@ -153,14 +163,29 @@ char *EMSCRIPTEN_KEEPALIVE bc_run_source(const char *source,
         st->deb_mask = device_deb_mask();
     }
 
-    interp_run(st, max_steps);
+    // Run in chunks with an Asyncify yield between them: the browser is
+    // single-threaded, so a Stop click (or any event) can only be delivered
+    // while the run is suspended. Programs that flush the screen yield there
+    // anyway; this keeps pure-compute loops interruptible too. interp_run's
+    // cap is an absolute step count, so calling it repeatedly just resumes.
+    g_stop_requested = false;
+    st->stop_flag = &g_stop_requested;   // breaks out mid-chunk too: a chunk of a
+                                         // flush-heavy program spans hours of vsyncs
+    const uint64_t CHUNK = 2000000;   // ~tens of ms of interpretation per yield
+    while (!st->halted && st->steps < max_steps && !g_stop_requested) {
+        uint64_t until = st->steps + CHUNK;
+        if (until > max_steps) until = max_steps;
+        interp_run(st, until);
+        emscripten_sleep(0);
+    }
     fflush(stdout);
     fflush(stderr);
 
     Buf out = { 0 };
     if (!st->halted) {
         char note[80];
-        snprintf(note, sizeof note, "(execution limit reached after %llu steps)\n",
+        snprintf(note, sizeof note, "(%s after %llu steps)\n",
+                 g_stop_requested ? "stopped" : "execution limit reached",
                  (unsigned long long)st->steps);
         buf_puts(&out, note);
     }

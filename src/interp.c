@@ -23,6 +23,7 @@ InterpState *interp_new(Arena *arena, const IrOptProgram *prog) {
     state->halted = false;
     state->inc_mask = NULL;
     state->deb_mask = NULL;
+    state->stop_flag = NULL;
 
     state->regs = arena_alloc(arena, sizeof(Bignum) * prog->reg_count);
     for (uint32_t i = 0; i < prog->reg_count; i++) {
@@ -179,6 +180,7 @@ void interp_step(InterpState *state) {
 
 void interp_run(InterpState *state, uint64_t max_steps) {
     while (!state->halted && state->steps < max_steps) {
+        if (state->stop_flag && *state->stop_flag) break;
         interp_step(state);
     }
 }
@@ -201,6 +203,7 @@ static const char *opt_op_name(IrOptOp op) {
 void interp_run_trace(InterpState *state, uint64_t max_steps,
                       uint64_t trace_limit, FILE *out) {
     while (!state->halted && state->steps < max_steps) {
+        if (state->stop_flag && *state->stop_flag) break;
         if (state->steps >= trace_limit) {
             fprintf(out, "... trace limit reached; continuing silently\n");
             interp_run(state, max_steps);
