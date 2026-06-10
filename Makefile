@@ -19,48 +19,58 @@ BUILDDIR = build
 SRCS = $(wildcard $(SRCDIR)/*.c)
 # Exclude QBE runtime files - compiled separately for QBE-generated executables
 SRCS := $(filter-out $(SRCDIR)/qbe_runtime.c $(SRCDIR)/qbe_driver.c,$(SRCS))
-OBJS = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(SRCS))
-DEPS = $(OBJS:.o=.d)
+
+# Each configuration compiles into its own object directory so switching
+# between `make`, `make debug`/`make test`, and `make sdl` never mixes
+# objects built with incompatible flags (ASan, -DBC_SDL, ...).
+RELEASE_OBJS = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/release/%.o,$(SRCS))
+DEBUG_OBJS   = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/debug/%.o,$(SRCS))
+SDL_OBJS     = $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/sdl/%.o,$(SRCS))
+DEPS = $(RELEASE_OBJS:.o=.d) $(DEBUG_OBJS:.o=.d) $(SDL_OBJS:.o=.d)
 
 # Exclude main.o for tests
-LIB_OBJS = $(filter-out $(BUILDDIR)/main.o,$(OBJS))
+TEST_LIB_OBJS = $(filter-out $(BUILDDIR)/debug/main.o,$(DEBUG_OBJS))
 
 TARGET = beancraft
 
 .PHONY: all clean debug test sdl wasm
 
-all: $(BUILDDIR) $(TARGET)
+all: $(TARGET)
 
-debug: CFLAGS = $(DEBUG_CFLAGS)
-debug: LDFLAGS = $(DEBUG_LDFLAGS)
-debug: $(BUILDDIR) $(TARGET)
-
-sdl: CFLAGS += -DBC_SDL $(SDL_CFLAGS)
-sdl: LDLIBS += $(SDL_LIBS)
-sdl: $(BUILDDIR) $(TARGET)
-
-$(BUILDDIR):
-	mkdir -p $(BUILDDIR)
-
-$(TARGET): $(OBJS)
+$(TARGET): $(RELEASE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BUILDDIR)/%.o: $(SRCDIR)/%.c
+debug: $(DEBUG_OBJS)
+	$(CC) $(DEBUG_LDFLAGS) -o $(TARGET) $^ $(LDLIBS)
+
+sdl: $(SDL_OBJS)
+	$(CC) $(LDFLAGS) -o $(TARGET) $^ $(SDL_LIBS) $(LDLIBS)
+
+$(BUILDDIR)/release/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+$(BUILDDIR)/debug/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(@D)
+	$(CC) $(DEBUG_CFLAGS) -MMD -MP -c -o $@ $<
+
+$(BUILDDIR)/sdl/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -DBC_SDL $(SDL_CFLAGS) -MMD -MP -c -o $@ $<
 
 -include $(DEPS)
 
-# Test targets
+# Test targets (built with the debug/sanitizer configuration)
 TEST_SRCS = $(wildcard $(TESTDIR)/*.c)
-TEST_BINS = $(patsubst $(TESTDIR)/%.c,$(BUILDDIR)/%,$(TEST_SRCS))
+TEST_BINS = $(patsubst $(TESTDIR)/%.c,$(BUILDDIR)/debug/%,$(TEST_SRCS))
 
-test: CFLAGS = $(DEBUG_CFLAGS)
-test: LDFLAGS = $(DEBUG_LDFLAGS)
-test: $(BUILDDIR) $(LIB_OBJS) $(TEST_BINS)
+test: $(TEST_BINS) $(TARGET)
 	@for t in $(TEST_BINS); do echo "Running $$t..."; $$t || exit 1; done
+	bash $(TESTDIR)/run_examples.sh
 
-$(BUILDDIR)/test_%: $(TESTDIR)/test_%.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -I include -o $@ $^
+$(BUILDDIR)/debug/test_%: $(TESTDIR)/test_%.c $(TEST_LIB_OBJS)
+	@mkdir -p $(@D)
+	$(CC) $(DEBUG_CFLAGS) $(DEBUG_LDFLAGS) -I include -o $@ $^
 
 clean:
 	rm -rf $(BUILDDIR) $(TARGET) libbcruntime.a web/beancraft.mjs web/beancraft.wasm
@@ -87,10 +97,11 @@ wasm:
 
 # QBE runtime library for compiled programs: the bignum implementation, the
 # bc_* shims the generated code calls, and the device subsystem.
-libbcruntime.a: $(BUILDDIR)/qbe_runtime.o $(BUILDDIR)/bignum.o $(BUILDDIR)/devices.o
+libbcruntime.a: $(BUILDDIR)/release/qbe_runtime.o $(BUILDDIR)/release/bignum.o $(BUILDDIR)/release/devices.o
 	ar rcs $@ $^
 
-$(BUILDDIR)/qbe_runtime.o: $(SRCDIR)/qbe_runtime.c
+$(BUILDDIR)/release/qbe_runtime.o: $(SRCDIR)/qbe_runtime.c
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Copy examples from Janet version

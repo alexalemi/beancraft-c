@@ -41,13 +41,14 @@ SDL2 (`pkg-config --exists sdl2`).
 $ make            # builds ./beancraft
 $ make test       # parser + bignum + optimizer unit tests (ASan/UBSan), then test/run_examples.sh
 $ make debug      # ./beancraft with -fsanitize=address,undefined
-$ make sdl        # ./beancraft with the SDL framebuffer backend  (run `make clean` when switching to/from this)
+$ make sdl        # ./beancraft with the SDL framebuffer backend
 $ make wasm       # web/beancraft.{mjs,wasm} — the interpreter as a WebAssembly module (needs Emscripten)
 $ make clean
 ```
 
-`make` and `make sdl` share `build/`, so run `make clean` before switching
-between them or you'll get SDL link errors from a stale object file.
+Each configuration compiles into its own subdirectory of `build/`
+(`release`, `debug`, `sdl`), so switching between `make`, `make test`, and
+`make sdl` never mixes incompatible objects — no `make clean` needed.
 
 ### Web playground
 
