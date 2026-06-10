@@ -84,7 +84,9 @@ fuzz: $(TESTDIR)/fuzz_pipeline.c $(FUZZ_SRCS)
 	@cp -n examples/*.bc $(BUILDDIR)/fuzz-corpus/ 2>/dev/null || true
 	$(FUZZ_CC) -g -O1 -fsanitize=fuzzer,address,undefined -I include \
 	  -o $(BUILDDIR)/fuzz_pipeline $(TESTDIR)/fuzz_pipeline.c $(FUZZ_SRCS)
-	@echo "Run:  $(BUILDDIR)/fuzz_pipeline $(BUILDDIR)/fuzz-corpus -max_len=4096"
+	@echo "Run:  $(BUILDDIR)/fuzz_pipeline $(BUILDDIR)/fuzz-corpus -max_len=4096 -rss_limit_mb=4096"
+	@echo "(the rss headroom is for legitimate transient arena peaks -- a"
+	@echo " worst-case input expands to ~400MB before its clean size error)"
 
 .PHONY: fuzz
 

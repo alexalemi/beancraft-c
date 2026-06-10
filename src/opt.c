@@ -252,11 +252,49 @@ static Pattern detect_iszero_pattern(const IrProgram *prog, uint32_t start) {
     return p;
 }
 
+// COPY: the classic non-destructive copy is two back-to-back transfers --
+// TRANSFER S -> {D..., T} exiting straight into TRANSFER T -> {S}. Each folds
+// to O(1) on its own; fusing them into one COPY (D_i += S; S += T; T := 0)
+// drops another instruction and the temp churn. Upgrades `first` in place.
+static Pattern try_upgrade_to_copy(const IrProgram *prog, Pattern first) {
+    if (first.exit_inst != first.end_inst) return first;   // second loop must be adjacent
+    Pattern second = detect_transfer_pattern(prog, first.end_inst);
+    if (second.type != PATTERN_TRANSFER) return first;
+
+    // The round-trip register T: the second loop's source, appearing exactly
+    // once among the first loop's destinations (twice would mean T = 2*S and
+    // the fused algebra below would be wrong).
+    uint32_t T = second.src_reg;
+    uint32_t t_hits = 0;
+    for (uint32_t d = 0; d < first.dst_count; d++) t_hits += (first.dst_regs[d] == T);
+    if (t_hits != 1) return first;
+
+    // The second loop must put T back into S, and nothing else.
+    if (second.dst_count != 1 || second.dst_regs[0] != first.src_reg) return first;
+
+    // The combined region must be private: in particular nothing outside may
+    // jump into the second loop's head (it stops being an entry point).
+    if (!body_is_private(prog, first.start_inst, second.end_inst, &second.exit_inst, 1))
+        return first;
+
+    Pattern p = { .type = PATTERN_COPY };
+    p.start_inst = first.start_inst;
+    p.end_inst = second.end_inst;
+    p.src_reg = first.src_reg;
+    p.exit_inst = second.exit_inst;
+    p.dst_regs[0] = T;
+    p.dst_count = 1;
+    for (uint32_t d = 0; d < first.dst_count; d++) {
+        if (first.dst_regs[d] != T) p.dst_regs[p.dst_count++] = first.dst_regs[d];
+    }
+    return p;
+}
+
 Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
     Pattern p = detect_muladd_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
     p = detect_transfer_pattern(prog, start);
-    if (p.type != PATTERN_NONE) return p;
+    if (p.type != PATTERN_NONE) return try_upgrade_to_copy(prog, p);
     p = detect_divmod_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
     p = detect_iszero_pattern(prog, start);
@@ -554,6 +592,15 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
                 for (uint32_t d = 0; d < p->dst_count; d++)
                     opt->dests[opt->dest_total++] = p->dst_regs[d];
                 break;
+            case PATTERN_COPY:
+                out.op = IR_OPT_COPY;
+                out.reg = p->src_reg;
+                out.arg_a = p->exit_inst;   // remapped in pass 3
+                out.dest_off = opt->dest_total;
+                out.dest_count = p->dst_count;   // dests[0] = T, then the D_i
+                for (uint32_t d = 0; d < p->dst_count; d++)
+                    opt->dests[opt->dest_total++] = p->dst_regs[d];
+                break;
             case PATTERN_DIVMOD:
                 out.op = IR_OPT_DIVMOD;
                 out.reg = p->src_reg;
@@ -688,7 +735,11 @@ void ir_opt_print(const IrOptProgram *prog) {
                    prog->reg_names[inst->reg]->data, inst->arg_a, inst->arg_b);
             break;
         case IR_OPT_COPY:
-            printf("COPY %s -> ... (not implemented)\n", prog->reg_names[inst->reg]->data);
+            printf("COPY %s -> {", prog->reg_names[inst->reg]->data);
+            for (uint32_t d = 1; d < inst->dest_count; d++)
+                printf("%s%s", d > 1 ? ", " : "", prog->reg_names[prog->dests[inst->dest_off + d]]->data);
+            printf("} via %s, then %u\n",
+                   prog->reg_names[prog->dests[inst->dest_off]]->data, inst->arg_a);
             break;
         default:
             printf("UNKNOWN op=%d\n", inst->op);

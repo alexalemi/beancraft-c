@@ -191,12 +191,14 @@ TEST(muladd_declines_when_accumulator_is_counter) {
     Pattern p = ir_detect_pattern(prog, 0);
     assert(p.type != PATTERN_MULADD);   // distinctness {C,S,T,D_i} violated (D_1 == C)
 
-    // It still folds to plain TRANSFERs (graceful degradation).
+    // Graceful degradation: the body's two back-to-back transfers fuse into
+    // a single COPY (B += A; A += tmp; tmp := 0) inside the outer deb loop.
     IrOptProgram *opt = ir_optimize(arena, prog, OPT_LOOPS);
     int ma, tx;
     count_ops(opt, &ma, &tx, NULL);
     assert(ma == 0);
-    assert(tx == 2);
+    assert(tx == 0);
+    assert(count_op(opt, IR_OPT_COPY) == 1);
 
     arena_free(arena);
 }
@@ -459,6 +461,61 @@ TEST(threading_keeps_real_decrements) {
     assert(opt[0] == raw[0] && opt[1] == raw[1]);
 }
 
+// The non-destructive copy idiom (copy.bc): TRANSFER From->{To,tmp} exiting
+// straight into TRANSFER tmp->{From}.
+static const char *COPY_SRC =
+    "deb tmp loop self\n"
+    "loop: - From refill\n"
+    "+ To\n"
+    "+ tmp loop\n"
+    "refill: - tmp done\n"
+    "+ From prev\n";
+
+TEST(copy_pattern_fuses_two_transfers) {
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+    IrOptProgram *opt = ir_optimize(arena, lower(arena, strings, COPY_SRC), OPT_LOOPS);
+    assert(count_op(opt, IR_OPT_COPY) == 1);
+    assert(count_op(opt, IR_OPT_TRANSFER) == 0);
+    arena_free(arena);
+}
+
+TEST(copy_matches_unoptimized) {
+    // Including tmp nonzero at entry: the fused S += T term must reproduce
+    // exactly what the two transfers would have done.
+    static const char *const init_names[] = {"From", "To", "tmp"};
+    static const uint64_t init_vals[] = {7, 3, 5};
+    static const char *const names[] = {"From", "To", "tmp"};
+    assert_opt_agrees(COPY_SRC, init_names, init_vals, 3, names, 3);
+
+    uint64_t out[3];
+    run_with(COPY_SRC, OPT_LOOPS, init_names, init_vals, 3, names, out, 3);
+    assert(out[0] == 7);       // From preserved (tmp was zeroed before the copy)
+    assert(out[1] == 3 + 7);   // To += From0
+    assert(out[2] == 0);       // tmp cleared
+}
+
+TEST(copy_with_external_entry_does_not_fuse) {
+    // Something outside jumps into the second loop's head, so it stays an
+    // entry point: the fusion must decline (two TRANSFERs remain correct).
+    static const char *SRC =
+        "- G refill\n"
+        "loop: - From refill\n"
+        "+ To\n"
+        "+ tmp loop\n"
+        "refill: - tmp done\n"
+        "+ From prev\n";
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+    IrOptProgram *opt = ir_optimize(arena, lower(arena, strings, SRC), OPT_LOOPS);
+    assert(count_op(opt, IR_OPT_COPY) == 0);
+    assert(count_op(opt, IR_OPT_TRANSFER) == 2);
+    arena_free(arena);
+
+    static const char *const names[] = {"From", "To", "tmp", "G"};
+    assert_opt_agrees(SRC, names, (const uint64_t[]){4, 1, 2, 3}, 4, names, 4);
+}
+
 TEST(transfer_and_zero_still_fold) {
     // A bare ZERO loop and a bare TRANSFER loop, neither of which is a MULADD.
     static const char *ZERO_SRC = "loop: - X done self\n";
@@ -500,6 +557,10 @@ int main(void) {
     RUN(iszero_matches_unoptimized);
     RUN(threading_removes_noop_jumps);
     RUN(threading_keeps_real_decrements);
+
+    RUN(copy_pattern_fuses_two_transfers);
+    RUN(copy_matches_unoptimized);
+    RUN(copy_with_external_entry_does_not_fuse);
 
     RUN(transfer_and_zero_still_fold);
 

@@ -34,7 +34,9 @@ typedef enum {
                           //   arg_b != 0: the loop body also began with `reg[T] = 0` each round,
                           //   so reg[T] is provably 0 -- the (C-1)*reg[T] and reg[S]+=reg[T] terms drop.
     IR_OPT_ISZERO,        // goto (reg[REG] == 0 ? arg_a : arg_b)   -- REG is left unchanged
-    IR_OPT_COPY,          // reserved (non-destructive copy); not emitted yet
+    IR_OPT_COPY,          // non-destructive copy: dests = [T, D_1..D_m];
+                          //   reg[D_i] += reg[REG];  reg[REG] += reg[T];  reg[T] = 0;  goto arg_a
+                          //   (the fold of TRANSFER REG->{D...,T} ; TRANSFER T->{REG})
 } IrOptOp;
 
 // Extended instruction for optimized IR.
@@ -93,6 +95,10 @@ typedef enum {
                           //    present, T is provably 0 and the (C-1)*T / S+=T terms vanish)
     PATTERN_ISZERO,       // deb R z; inc R nz   (deb's non-zero branch falls into the inc, which
                           //   undoes the decrement)  ->  goto (R == 0 ? z : nz)   -- R unchanged
+    PATTERN_COPY,         // TRANSFER S -> {D..., T} immediately followed by TRANSFER T -> {S}
+                          //   (the classic non-destructive copy: move S out through a temp,
+                          //    then move the temp back)  ->  D_i += S;  S += T;  T := 0
+                          //   dst_regs = [T, D_1..D_m]
 } PatternType;
 
 // Detected pattern info

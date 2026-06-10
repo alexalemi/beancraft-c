@@ -366,11 +366,31 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
             buf_printf(&buf, "    jnz %%izc, @inst_%u, @inst_%u\n\n", inst->arg_a, inst->arg_b);
             break;
 
-        case IR_OPT_COPY:
-            // The optimizer never emits COPY; if it ever does, fall through
-            // harmlessly rather than miscompile.
+        case IR_OPT_COPY: {
+            // dests[0] = T, dests[1..] = D_i:  D_i += S; S += T; T := 0.
+            if (opts.emit_debug_info) {
+                buf_printf(&buf, "    # COPY %s -> {", prog->reg_names[inst->reg]->data);
+                for (uint32_t d = 1; d < inst->dest_count; d++)
+                    buf_printf(&buf, "%s%s", d > 1 ? ", " : "",
+                               prog->reg_names[prog->dests[inst->dest_off + d]]->data);
+                buf_printf(&buf, "} via %s\n",
+                           prog->reg_names[prog->dests[inst->dest_off]]->data);
+            }
+            emit_reg_ptr(&buf, "src", inst->reg);
+            buf_puts(&buf, "    %srcval =l loadl %src\n");
+            for (uint32_t d = 1; d < inst->dest_count; d++) {
+                buf_printf(&buf, "    %%dst%u =l add $bc_regs, %u\n",
+                           d, prog->dests[inst->dest_off + d] * 8);
+                buf_printf(&buf, "    call $bc_add_into(l %%dst%u, l %%srcval)\n", d);
+            }
+            buf_printf(&buf, "    %%tptr =l add $bc_regs, %u\n",
+                       prog->dests[inst->dest_off] * 8);
+            buf_puts(&buf, "    %tval =l loadl %tptr\n");
+            buf_puts(&buf, "    call $bc_add_into(l %src, l %tval)\n");
+            buf_puts(&buf, "    call $bc_zero(l %tptr)\n");
             buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
             break;
+        }
 
         default:
             buf_printf(&buf, "    # unknown op %d\n", inst->op);

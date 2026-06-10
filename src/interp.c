@@ -168,9 +168,25 @@ void interp_step(InterpState *state) {
         state->pc = bignum_is_zero(state->regs[inst->reg]) ? inst->arg_a : inst->arg_b;
         break;
 
-    case IR_OPT_COPY:
+    case IR_OPT_COPY: {
+        // dests[0] = T (the round-trip temp), dests[1..] = D_i. Fold of
+        // TRANSFER S->{D...,T} ; TRANSFER T->{S}:  D_i += S; S += T; T := 0.
+        // S and T are distinct from each other and from every D_i (the
+        // optimizer guarantees it), so reading regs[S] while adding into the
+        // D_i is safe.
+        Bignum src = state->regs[inst->reg];
+        for (uint32_t i = 1; i < inst->dest_count; i++) {
+            bignum_add_into(&state->regs[prog->dests[inst->dest_off + i]], src);
+        }
+        uint32_t Ti = prog->dests[inst->dest_off];
+        bignum_add_into(&state->regs[inst->reg], state->regs[Ti]);
+        bignum_set_zero(&state->regs[Ti]);
+        state->pc = inst->arg_a;
+        break;
+    }
+
     default:
-        // Not emitted by the current optimizer; fall through harmlessly.
+        // Unknown op; fall through harmlessly.
         state->pc = inst->arg_a;
         break;
     }
