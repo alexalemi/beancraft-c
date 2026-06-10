@@ -83,6 +83,7 @@ $ ./beancraft [options] file.bc [REG=VALUE ...]
 | `-O, --optimize` | enable the loop-folding optimizer (see below) |
 | `-c, --check` | differential test: run at `-O0` *and* `-O`, compare every register, exit non-zero on mismatch |
 | `--trace[=N]` | print every executed instruction to stderr (step, pc, op, register before → after); `=N` stops tracing after N steps |
+| `--debug` | interactive debugger: `s`tep, `c`ontinue, `b`reakpoints by label or pc, `w`atch a register, `p`rint/`regs`, `l`ist; runs unoptimized so labels map 1:1 |
 | `--show-ast` / `--show-ir` / `--show-opt` | dump the AST / IR / optimized IR, then run (use `-n` to just dump) |
 | `--emit-qbe` | emit QBE IL to stdout, then exit (combine with `-O`) |
 | `--emit-urm` | emit the program (and registers) Gödel-encoded for `examples/urm.bc`, then exit |

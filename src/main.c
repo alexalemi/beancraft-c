@@ -8,6 +8,7 @@
 #include "beancraft/qbe.h"
 #include "beancraft/opt.h"
 #include "beancraft/devices.h"
+#include "beancraft/debug.h"
 #include "beancraft/error.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -59,6 +60,7 @@ static void print_usage(const char *prog) {
         "  --show-opt          Print the optimized IR (implies -O)\n"
         "  -c, --check         Run at -O0 and -O and compare results (differential test)\n"
         "  --trace[=N]         Print each executed instruction to stderr (first N steps)\n"
+        "  --debug             Interactive debugger (step/continue/breakpoints/watch); runs unoptimized\n"
         "  -h, --help          Show this help\n"
         "\n"
         "Register initialization:\n"
@@ -117,6 +119,7 @@ static struct option long_options[] = {
     {"show-opt",   no_argument,       NULL, 'P'},
     {"check",      no_argument,       NULL, 'c'},
     {"trace",      optional_argument, NULL, 'T'},
+    {"debug",      no_argument,       NULL, 'D'},
     {"help",       no_argument,       NULL, 'h'},
     {NULL,         0,                 NULL, 0}
 };
@@ -133,6 +136,7 @@ int main(int argc, char *argv[]) {
     bool optimize = false;
     bool show_opt = false;
     bool check = false;
+    bool debug = false;
     bool steps_set = false;
     uint64_t max_steps = DEFAULT_MAX_STEPS;
     uint64_t trace_steps = 0;   // 0 = no tracing
@@ -180,6 +184,9 @@ int main(int argc, char *argv[]) {
             break;
         case 'T':
             trace_steps = optarg ? (uint64_t)atoll(optarg) : UINT64_MAX;
+            break;
+        case 'D':
+            debug = true;
             break;
         case 'h':
             print_usage(argv[0]);
@@ -310,6 +317,10 @@ int main(int argc, char *argv[]) {
     // at -O it folds recognized loop idioms (ZERO, TRANSFER) into O(1) ops.
     // The interpreter runs this form directly, so -O speeds up interpretation
     // too, not just `--emit-qbe`.
+    if (debug && optimize) {
+        fprintf(stderr, "note: --debug runs unoptimized so labels map 1:1 (-O ignored)\n");
+        optimize = false;
+    }
     OptLevel level = optimize ? OPT_LOOPS : OPT_NONE;
     IrOptProgram *opt_prog = ir_optimize(arena, prog, level);
 
@@ -452,7 +463,9 @@ int main(int argc, char *argv[]) {
         printf("Running (max %" PRIu64 " steps)...\n", max_steps);
     }
 
-    if (trace_steps > 0) {
+    if (debug) {
+        debug_repl(state, prog, max_steps);
+    } else if (trace_steps > 0) {
         interp_run_trace(state, max_steps, trace_steps, stderr);
     } else {
         interp_run(state, max_steps);
@@ -470,7 +483,7 @@ int main(int argc, char *argv[]) {
         printf("Results:\n");
         interp_print_regs(state);
 
-        if (!state->halted) {
+        if (!state->halted && !debug) {   // quitting the debugger early is deliberate
             fprintf(stderr, "\nWarning: execution limit reached (%" PRIu64 " steps)\n",
                     state->steps);
         }
