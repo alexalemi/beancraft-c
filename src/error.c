@@ -73,6 +73,10 @@ static const char *location_prefix(const BcError *err, char *buf, size_t n) {
         snprintf(buf, n, "%s:%u: ", err->filename, err->line);
     } else if (err->filename) {
         snprintf(buf, n, "%s: ", err->filename);
+    } else if (err->line > 0) {
+        // No filename recorded (e.g. errors raised after loader expansion),
+        // but the line number is still worth printing.
+        snprintf(buf, n, "line %u: ", err->line);
     } else {
         buf[0] = '\0';
     }

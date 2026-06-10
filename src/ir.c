@@ -142,8 +142,18 @@ static BcResult resolve_jump(Arena *arena, const Jump *jump, uint32_t current_ad
     case JUMP_LABEL: {
         int32_t addr = label_table_find(labels, jump->label);
         if (addr < 0) {
+            // Loader-scoped names look like "f-0/dest" (or "<path>-N/dest");
+            // report the user's label name and where it was being expanded
+            // instead of leaking the mangled form.
+            const char *full = jump->label->data;
+            const char *slash = strrchr(full, '/');
+            if (slash && slash != full && slash[1] != '\0') {
+                return bc_err(arena, BC_ERR_SEMANTIC, filename, line, 0,
+                             "undefined label '%s' (inside the expansion of '%.*s')",
+                             slash + 1, (int)(slash - full), full);
+            }
             return bc_err(arena, BC_ERR_SEMANTIC, filename, line, 0,
-                         "undefined label '%s'", jump->label->data);
+                         "undefined label '%s'", full);
         }
         return BC_OK((void *)(uintptr_t)addr);
     }
