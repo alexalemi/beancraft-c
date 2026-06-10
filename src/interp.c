@@ -1,5 +1,6 @@
 #include "beancraft/interp.h"
 #include "beancraft/devices.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -183,7 +184,7 @@ void interp_run(InterpState *state, uint64_t max_steps) {
 }
 
 void interp_print_state(const InterpState *state) {
-    printf("PC: %u, Steps: %lu, Halted: %s\n",
+    printf("PC: %u, Steps: %" PRIu64 ", Halted: %s\n",
            state->pc, state->steps, state->halted ? "yes" : "no");
 }
 

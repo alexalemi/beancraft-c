@@ -1,4 +1,5 @@
 #include "beancraft/bignum.h"
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -6,6 +7,17 @@
 // ============================================================
 // Heap allocation helpers
 // ============================================================
+
+// malloc that aborts on OOM (like the rest of the bignum allocators) instead
+// of letting a NULL flow into memcpy/snprintf.
+static void *xmalloc(size_t size) {
+    void *p = malloc(size);
+    if (!p) {
+        fprintf(stderr, "beancraft: out of memory\n");
+        abort();
+    }
+    return p;
+}
 
 static BigLimbs *limbs_alloc(uint32_t capacity) {
     BigLimbs *limbs = malloc(sizeof(BigLimbs) + capacity * sizeof(uint64_t));
@@ -201,24 +213,16 @@ Bignum bignum_add(Bignum a, Bignum b) {
         uint64_t va = bignum_get_immediate(a);
         uint64_t vb = bignum_get_immediate(b);
 
-        // Check for overflow
-        uint64_t sum;
-        if (!__builtin_add_overflow(va, vb, &sum)) {
-            if (sum <= BIGNUM_MAX_IMMEDIATE) {
-                return bignum_make_immediate(sum);
-            }
-            // Sum doesn't fit in immediate but didn't overflow u64
-            BigLimbs *limbs = limbs_alloc(2);
-            limbs->limbs[0] = sum;
-            limbs->len = 1;
-            return (Bignum)limbs;
+        // Immediates are <= BIGNUM_MAX_IMMEDIATE = 2^62 - 1, so the sum is at
+        // most 2^63 - 2 and can never overflow u64.
+        uint64_t sum = va + vb;
+        if (sum <= BIGNUM_MAX_IMMEDIATE) {
+            return bignum_make_immediate(sum);
         }
-        // Overflow - need 2 limbs
+        // Sum doesn't fit in an immediate; promote to a single heap limb.
         BigLimbs *limbs = limbs_alloc(2);
-        // sum with overflow means we need to add the carry
-        limbs->limbs[0] = va + vb;  // Lower 64 bits
-        limbs->limbs[1] = 1;        // Carry
-        limbs->len = 2;
+        limbs->limbs[0] = sum;
+        limbs->len = 1;
         return (Bignum)limbs;
     }
 
@@ -468,7 +472,7 @@ bool bignum_to_u64(Bignum x, uint64_t *out) {
 
 char *bignum_to_string(Bignum x) {
     if (bignum_is_zero(x)) {
-        char *s = malloc(2);
+        char *s = xmalloc(2);
         s[0] = '0';
         s[1] = '\0';
         return s;
@@ -476,8 +480,8 @@ char *bignum_to_string(Bignum x) {
 
     if (bignum_is_immediate(x)) {
         uint64_t val = bignum_get_immediate(x);
-        char *s = malloc(21);  // Max 20 digits for u64
-        snprintf(s, 21, "%lu", val);
+        char *s = xmalloc(21);  // Max 20 digits for u64
+        snprintf(s, 21, "%" PRIu64, val);
         return s;
     }
 
@@ -485,12 +489,12 @@ char *bignum_to_string(Bignum x) {
     // Clone the number since we'll be modifying it
     BigLimbs *limbs = bignum_get_ptr(x);
     uint32_t len = limbs->len;
-    uint64_t *tmp = malloc(len * sizeof(uint64_t));
+    uint64_t *tmp = xmalloc(len * sizeof(uint64_t));
     memcpy(tmp, limbs->limbs, len * sizeof(uint64_t));
 
     // Estimate max digits: log10(2^64^n) = 64*n * log10(2) ≈ 19.3*n
     size_t max_digits = len * 20 + 1;
-    char *digits = malloc(max_digits);
+    char *digits = xmalloc(max_digits);
     size_t pos = 0;
 
     while (len > 0) {
@@ -512,7 +516,7 @@ char *bignum_to_string(Bignum x) {
     free(tmp);
 
     // Reverse the digits
-    char *result = malloc(pos + 1);
+    char *result = xmalloc(pos + 1);
     for (size_t i = 0; i < pos; i++) {
         result[i] = digits[pos - 1 - i];
     }
