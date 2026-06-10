@@ -20,9 +20,19 @@ typedef struct {
 static bool parse_one(Parser *p, AstNode *node);
 static bool parse_funcdef(Parser *p);
 
+static void error(Parser *p, const char *message) {
+    if (p->had_error) return;  // Suppress cascading errors
+    p->had_error = true;
+    snprintf(p->error_msg, sizeof(p->error_msg), "%s", message);
+}
+
 static void advance(Parser *p) {
     p->previous = p->current;
     p->current = lexer_next(&p->lexer);
+    // Surface the lexer's own message ("unterminated string", "number literal
+    // too large", ...) instead of whatever generic "expected X" the parser
+    // would report for the unusable token.
+    if (p->current.kind == TOK_ERROR) error(p, p->current.error);
 }
 
 static bool check(Parser *p, TokenKind kind) {
@@ -33,12 +43,6 @@ static bool match(Parser *p, TokenKind kind) {
     if (!check(p, kind)) return false;
     advance(p);
     return true;
-}
-
-static void error(Parser *p, const char *message) {
-    if (p->had_error) return;  // Suppress cascading errors
-    p->had_error = true;
-    snprintf(p->error_msg, sizeof(p->error_msg), "%s", message);
 }
 
 static bool consume(Parser *p, TokenKind kind, const char *message) {

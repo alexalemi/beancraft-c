@@ -157,12 +157,17 @@ static Token scan_number(Lexer *lex) {
         return make_error("expected number", start_line, start_col);
     }
 
-    // Parse the number
+    // Parse the number, rejecting anything that won't fit in int64_t (the
+    // unchecked multiply-add is signed-overflow UB on 20+ digit literals).
     int64_t value = 0;
     for (size_t i = start; i < lex->pos; i++) {
         char c = lex->source[i];
         if (c == '+' || c == '-') continue;
-        value = value * 10 + (c - '0');
+        int digit = c - '0';
+        if (value > (INT64_MAX - digit) / 10) {
+            return make_error("number literal too large", start_line, start_col);
+        }
+        value = value * 10 + digit;
     }
     if (negative) value = -value;
 
