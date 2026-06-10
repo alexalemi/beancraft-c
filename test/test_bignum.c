@@ -346,6 +346,115 @@ TEST(string_roundtrip) {
 }
 
 // ============================================================
+// divmod_small tests (backs the interpreter's DIVMOD fold and the
+// devices' byte extraction)
+// ============================================================
+
+TEST(divmod_small_immediate) {
+    Bignum x = bignum_from_u64(1234567);
+    uint64_t rem = bignum_divmod_small(&x, 10);
+    assert(rem == 7);
+    uint64_t q;
+    assert(bignum_to_u64(x, &q));
+    assert(q == 123456);
+}
+
+TEST(divmod_small_by_256) {
+    Bignum x = bignum_from_u64(0xCAFEu);
+    assert(bignum_divmod_small(&x, 256) == 0xFE);
+    uint64_t q;
+    assert(bignum_to_u64(x, &q));
+    assert(q == 0xCA);
+}
+
+TEST(divmod_small_multi_limb) {
+    // x = 10 * (2^64 + 3) + 7: dividing by 10 exercises the cross-limb
+    // remainder carry and leaves a two-limb quotient.
+    Bignum x = bignum_from_u64(UINT64_MAX);  // 2^64 - 1, heap
+    assert(!bignum_is_immediate(x));
+    for (int i = 0; i < 4; i++) assert(bignum_inc(&x));   // 2^64 + 3
+    Bignum ten = bignum_from_u64(10);
+    Bignum prod = bignum_mul(x, ten);                     // 10*2^64 + 30
+    for (int i = 0; i < 7; i++) assert(bignum_inc(&prod));// 10*2^64 + 37
+
+    uint64_t rem = bignum_divmod_small(&prod, 10);
+    assert(rem == 7);
+    assert(bignum_eq(prod, x));   // quotient = 2^64 + 3
+
+    bignum_free(&x);
+    bignum_free(&prod);
+}
+
+TEST(divmod_small_demotes_quotient) {
+    // A heap value divided down to immediate range must demote (bignum_cmp
+    // and the IS_ZERO codegen rely on heap values never fitting an immediate).
+    Bignum x = bignum_from_u64(UINT64_MAX);
+    assert(!bignum_is_immediate(x));
+    uint64_t rem = bignum_divmod_small(&x, 1u << 16);
+    assert(rem == 0xFFFF);
+    assert(bignum_is_immediate(x));
+    uint64_t q;
+    assert(bignum_to_u64(x, &q));
+    assert(q == UINT64_MAX >> 16);
+}
+
+// ============================================================
+// Limb-boundary tests: inc/dec across 2^64
+// ============================================================
+
+TEST(inc_crosses_limb_boundary) {
+    // 2^64 - 1 is a single (heap) limb; one more inc must grow to two limbs.
+    Bignum x = bignum_from_u64(UINT64_MAX);
+    assert(bignum_inc(&x));
+    uint64_t back;
+    assert(!bignum_to_u64(x, &back));   // 2^64 no longer fits a u64
+
+    char *s = bignum_to_string(x);
+    assert(strcmp(s, "18446744073709551616") == 0);   // 2^64
+    free(s);
+    bignum_free(&x);
+}
+
+TEST(dec_crosses_limb_boundary) {
+    Bignum x = bignum_from_u64(UINT64_MAX);
+    assert(bignum_inc(&x));             // 2^64, two limbs
+    assert(bignum_dec(&x));             // back to 2^64 - 1
+    uint64_t back;
+    assert(bignum_to_u64(x, &back));
+    assert(back == UINT64_MAX);
+    bignum_free(&x);
+}
+
+TEST(add_carry_creates_new_top_limb) {
+    // (2^128 - 1) + 1 = 2^128: carry must propagate through both limbs and
+    // append a third.
+    Bignum max = bignum_from_u64(UINT64_MAX);            // 2^64 - 1
+    Bignum sq = bignum_mul(max, max);                    // 2^128 - 2^65 + 1
+    Bignum t1 = bignum_add(sq, max);                     // + 2^64 - 1
+    Bignum all_ones = bignum_add(t1, max);               // 2^128 - 1
+    Bignum one = bignum_from_u64(1);
+    Bignum sum = bignum_add(all_ones, one);              // 2^128
+
+    char *s = bignum_to_string(sum);
+    assert(strcmp(s, "340282366920938463463374607431768211456") == 0);  // 2^128
+    free(s);
+
+    bignum_free(&max); bignum_free(&sq); bignum_free(&t1);
+    bignum_free(&all_ones); bignum_free(&sum);
+}
+
+TEST(clone_heap_value) {
+    Bignum x = bignum_from_u64(UINT64_MAX);
+    assert(bignum_inc(&x));
+    Bignum y = bignum_clone(x);
+    assert(bignum_eq(x, y));
+    assert(bignum_dec(&y));             // mutating the clone...
+    assert(!bignum_eq(x, y));           // ...must not touch the original
+    bignum_free(&x);
+    bignum_free(&y);
+}
+
+// ============================================================
 // Comparison tests
 // ============================================================
 
@@ -426,6 +535,16 @@ int main(void) {
     RUN(from_string_simple);
     RUN(from_string_zero);
     RUN(string_roundtrip);
+
+    RUN(divmod_small_immediate);
+    RUN(divmod_small_by_256);
+    RUN(divmod_small_multi_limb);
+    RUN(divmod_small_demotes_quotient);
+
+    RUN(inc_crosses_limb_boundary);
+    RUN(dec_crosses_limb_boundary);
+    RUN(add_carry_creates_new_top_limb);
+    RUN(clone_heap_value);
 
     RUN(cmp_equal);
     RUN(cmp_less);
