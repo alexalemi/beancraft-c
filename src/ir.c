@@ -51,20 +51,90 @@ static void ensure_reg_capacity(IrProgram *prog) {
     }
 }
 
-// Find or add a register, returns index
-static uint32_t find_or_add_reg(IrProgram *prog, Str *name) {
-    // Search existing
-    for (uint32_t i = 0; i < prog->reg_count; i++) {
-        if (str_eq(prog->reg_names[i], name)) {
-            return i;
+// ---------------------------------------------------------------------------
+// Str* -> u32 map. Interned strings compare by pointer (str_eq), so an
+// open-addressing table on the pointer keeps register and label lookup O(1)
+// instead of O(n) per reference -- loader expansions (urm.bc-scale programs)
+// produce tens of thousands of distinct names.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    Arena *arena;
+    Str **keys;        // NULL = empty slot
+    uint32_t *vals;
+    uint32_t cap;      // power of two
+    uint32_t count;
+} PtrMap;
+
+static uint64_t ptr_hash(const Str *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return x;
+}
+
+static PtrMap *ptrmap_new(Arena *arena, uint32_t cap) {
+    PtrMap *m = arena_alloc(arena, sizeof(PtrMap));
+    m->arena = arena;
+    m->cap = cap;          // must be a power of two
+    m->count = 0;
+    m->keys = arena_alloc_zero(arena, cap * sizeof(Str *));
+    m->vals = arena_alloc(arena, cap * sizeof(uint32_t));
+    return m;
+}
+
+static bool ptrmap_get(const PtrMap *m, Str *key, uint32_t *out) {
+    uint32_t mask = m->cap - 1;
+    for (uint32_t i = (uint32_t)ptr_hash(key) & mask; m->keys[i]; i = (i + 1) & mask) {
+        if (m->keys[i] == key) { *out = m->vals[i]; return true; }
+    }
+    return false;
+}
+
+static void ptrmap_put(PtrMap *m, Str *key, uint32_t val);
+
+static void ptrmap_grow(PtrMap *m) {
+    Str **old_keys = m->keys;
+    uint32_t *old_vals = m->vals;
+    uint32_t old_cap = m->cap;
+    m->cap *= 2;
+    m->count = 0;
+    m->keys = arena_alloc_zero(m->arena, m->cap * sizeof(Str *));
+    m->vals = arena_alloc(m->arena, m->cap * sizeof(uint32_t));
+    for (uint32_t i = 0; i < old_cap; i++) {
+        if (old_keys[i]) ptrmap_put(m, old_keys[i], old_vals[i]);
+    }
+}
+
+static void ptrmap_put(PtrMap *m, Str *key, uint32_t val) {
+    if (m->count * 4 >= m->cap * 3) ptrmap_grow(m);   // <= 75% load
+    uint32_t mask = m->cap - 1;
+    uint32_t i = (uint32_t)ptr_hash(key) & mask;
+    while (m->keys[i] && m->keys[i] != key) i = (i + 1) & mask;
+    if (!m->keys[i]) m->count++;
+    m->keys[i] = key;
+    m->vals[i] = val;
+}
+
+// Find or add a register, returns index. `map` caches name -> index; pass NULL
+// for one-off additions (ir_add_nil_reg).
+static uint32_t find_or_add_reg(IrProgram *prog, PtrMap *map, Str *name) {
+    uint32_t idx;
+    if (map && ptrmap_get(map, name, &idx)) return idx;
+    if (!map) {
+        // Linear fallback for the rare un-mapped call.
+        for (uint32_t i = 0; i < prog->reg_count; i++) {
+            if (str_eq(prog->reg_names[i], name)) return i;
         }
     }
 
     // Add new
     ensure_reg_capacity(prog);
-    uint32_t idx = prog->reg_count++;
+    idx = prog->reg_count++;
     prog->reg_names[idx] = name;
     prog->reg_init[idx] = 0;
+    if (map) ptrmap_put(map, name, idx);
     return idx;
 }
 
@@ -85,54 +155,12 @@ void ir_set_reg_init(IrProgram *prog, uint32_t reg_idx, uint64_t value) {
 
 void ir_add_nil_reg(IrProgram *prog) {
     Str *nil_name = str_intern_cstr(prog->strings, ":nil");
-    find_or_add_reg(prog, nil_name);
+    find_or_add_reg(prog, NULL, nil_name);
 }
 
-// Label table for resolution
-typedef struct {
-    Str *name;
-    uint32_t addr;
-} LabelEntry;
-
-typedef struct {
-    Arena *arena;
-    LabelEntry *entries;
-    uint32_t count;
-    uint32_t capacity;
-} LabelTable;
-
-static LabelTable *label_table_new(Arena *arena) {
-    LabelTable *t = arena_alloc(arena, sizeof(LabelTable));
-    t->arena = arena;
-    t->count = 0;
-    t->capacity = INITIAL_CAPACITY;
-    t->entries = arena_alloc(arena, sizeof(LabelEntry) * t->capacity);
-    return t;
-}
-
-static void label_table_add(LabelTable *t, Str *name, uint32_t addr) {
-    if (t->count >= t->capacity) {
-        uint32_t new_cap = t->capacity * 2;
-        LabelEntry *new_entries = arena_alloc(t->arena, sizeof(LabelEntry) * new_cap);
-        memcpy(new_entries, t->entries, sizeof(LabelEntry) * t->count);
-        t->entries = new_entries;
-        t->capacity = new_cap;
-    }
-    t->entries[t->count++] = (LabelEntry){ .name = name, .addr = addr };
-}
-
-static int32_t label_table_find(LabelTable *t, Str *name) {
-    for (uint32_t i = 0; i < t->count; i++) {
-        if (str_eq(t->entries[i].name, name)) {
-            return (int32_t)t->entries[i].addr;
-        }
-    }
-    return -1;
-}
-
-// Resolve a jump target to an address
+// Resolve a jump target to an address. `labels` maps label Str* -> address.
 static BcResult resolve_jump(Arena *arena, const Jump *jump, uint32_t current_addr,
-                             uint32_t inst_count, LabelTable *labels,
+                             uint32_t inst_count, const PtrMap *labels,
                              const char *filename, uint32_t line) {
     switch (jump->kind) {
     case JUMP_NONE:
@@ -140,8 +168,8 @@ static BcResult resolve_jump(Arena *arena, const Jump *jump, uint32_t current_ad
         return BC_OK((void *)(uintptr_t)(current_addr + 1));
 
     case JUMP_LABEL: {
-        int32_t addr = label_table_find(labels, jump->label);
-        if (addr < 0) {
+        uint32_t addr;
+        if (!ptrmap_get(labels, jump->label, &addr)) {
             // Loader-scoped names look like "f-0/dest" (or "<path>-N/dest");
             // report the user's label name and where it was being expanded
             // instead of leaking the mangled form.
@@ -194,20 +222,24 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
     IrProgram *prog = ir_new(arena, strings);
 
     // First pass: collect all labels
-    LabelTable *labels = label_table_new(arena);
+    PtrMap *labels = ptrmap_new(arena, 64);
     for (uint32_t i = 0; i < ast->node_count; i++) {
         const AstNode *node = &ast->nodes[i];
         if (node->label) {
-            if (label_table_find(labels, node->label) >= 0) {
+            uint32_t prev;
+            if (ptrmap_get(labels, node->label, &prev)) {
                 return bc_err(arena, BC_ERR_SEMANTIC, NULL, node->line, 0,
                               "duplicate label '%s'", node->label->data);
             }
-            label_table_add(labels, node->label, i);
+            ptrmap_put(labels, node->label, i);
         }
     }
 
     // Add implicit halt at end
     uint32_t total_insts = ast->node_count + 1;
+
+    // Register name -> index cache for the second pass.
+    PtrMap *regs = ptrmap_new(arena, 64);
 
     // Second pass: convert AST nodes to IR instructions
     for (uint32_t i = 0; i < ast->node_count; i++) {
@@ -218,7 +250,7 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
         switch (node->kind) {
         case AST_INC: {
             inst->op = IR_INC;
-            inst->reg = find_or_add_reg(prog, node->inc.reg);
+            inst->reg = find_or_add_reg(prog, regs, node->inc.reg);
 
             BcResult res = resolve_jump(arena, &node->inc.next, i, total_insts,
                                         labels, NULL, node->line);
@@ -230,7 +262,7 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
 
         case AST_DEB: {
             inst->op = IR_DEB;
-            inst->reg = find_or_add_reg(prog, node->deb.reg);
+            inst->reg = find_or_add_reg(prog, regs, node->deb.reg);
 
             BcResult res_jump = resolve_jump(arena, &node->deb.jump, i, total_insts,
                                              labels, NULL, node->line);
@@ -279,7 +311,7 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
             uint32_t dep_count;
             const char *const *deps = device_dependencies(prog->reg_names[i]->data, &dep_count);
             for (uint32_t d = 0; d < dep_count; d++) {
-                find_or_add_reg(prog, str_intern_cstr(strings, deps[d]));
+                find_or_add_reg(prog, regs, str_intern_cstr(strings, deps[d]));
             }
         }
     }
@@ -289,8 +321,8 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
 
     // Store label names for debugging
     prog->label_names = arena_alloc_zero(arena, sizeof(Str *) * prog->inst_count);
-    for (uint32_t i = 0; i < labels->count; i++) {
-        prog->label_names[labels->entries[i].addr] = labels->entries[i].name;
+    for (uint32_t i = 0; i < labels->cap; i++) {
+        if (labels->keys[i]) prog->label_names[labels->vals[i]] = labels->keys[i];
     }
 
     return BC_OK(prog);
