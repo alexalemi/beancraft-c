@@ -15,23 +15,27 @@ static const char *error_kind_str(BcErrorKind kind) {
     }
 }
 
+// Format `fmt` into an arena-allocated message; never returns NULL (a
+// vsnprintf encoding failure falls back to a placeholder rather than letting
+// NULL reach a %s downstream).
+static char *format_message(Arena *arena, const char *fmt, va_list args) {
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (len < 0) return "(error message formatting failed)";
+    char *message = arena_alloc(arena, (size_t)len + 1);
+    vsnprintf(message, (size_t)len + 1, fmt, args);
+    return message;
+}
+
 BcResult bc_err(Arena *arena, BcErrorKind kind, const char *filename,
                 uint32_t line, uint32_t column, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-
-    // Format the message
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int len = vsnprintf(NULL, 0, fmt, args);
+    char *message = format_message(arena, fmt, args);
     va_end(args);
-
-    char *message = NULL;
-    if (len >= 0) {
-        message = arena_alloc(arena, (size_t)len + 1);
-        vsnprintf(message, (size_t)len + 1, fmt, args_copy);
-    }
-    va_end(args_copy);
 
     BcError err = {
         .kind = kind,
@@ -47,18 +51,8 @@ BcResult bc_err(Arena *arena, BcErrorKind kind, const char *filename,
 BcResult bc_errf(Arena *arena, BcErrorKind kind, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int len = vsnprintf(NULL, 0, fmt, args);
+    char *message = format_message(arena, fmt, args);
     va_end(args);
-
-    char *message = NULL;
-    if (len >= 0) {
-        message = arena_alloc(arena, (size_t)len + 1);
-        vsnprintf(message, (size_t)len + 1, fmt, args_copy);
-    }
-    va_end(args_copy);
 
     BcError err = {
         .kind = kind,
@@ -71,44 +65,32 @@ BcResult bc_errf(Arena *arena, BcErrorKind kind, const char *fmt, ...) {
     return (BcResult){ .ok = false, .error = err };
 }
 
+// Build the "file:line:col: " location prefix (possibly empty) into buf.
+static const char *location_prefix(const BcError *err, char *buf, size_t n) {
+    if (err->filename && err->line > 0 && err->column > 0) {
+        snprintf(buf, n, "%s:%u:%u: ", err->filename, err->line, err->column);
+    } else if (err->filename && err->line > 0) {
+        snprintf(buf, n, "%s:%u: ", err->filename, err->line);
+    } else if (err->filename) {
+        snprintf(buf, n, "%s: ", err->filename);
+    } else {
+        buf[0] = '\0';
+    }
+    return buf;
+}
+
 char *bc_error_format(Arena *arena, const BcError *err) {
     if (!err) return NULL;
-
-    if (err->filename && err->line > 0 && err->column > 0) {
-        return arena_sprintf(arena, "%s:%u:%u: %s: %s",
-                            err->filename, err->line, err->column,
-                            error_kind_str(err->kind), err->message);
-    } else if (err->filename && err->line > 0) {
-        return arena_sprintf(arena, "%s:%u: %s: %s",
-                            err->filename, err->line,
-                            error_kind_str(err->kind), err->message);
-    } else if (err->filename) {
-        return arena_sprintf(arena, "%s: %s: %s",
-                            err->filename,
-                            error_kind_str(err->kind), err->message);
-    } else {
-        return arena_sprintf(arena, "%s: %s",
-                            error_kind_str(err->kind), err->message);
-    }
+    char loc[512];
+    return arena_sprintf(arena, "%s%s: %s",
+                         location_prefix(err, loc, sizeof loc),
+                         error_kind_str(err->kind), err->message);
 }
 
 void bc_error_print(const BcError *err) {
     if (!err) return;
-
-    if (err->filename && err->line > 0 && err->column > 0) {
-        fprintf(stderr, "%s:%u:%u: %s: %s\n",
-                err->filename, err->line, err->column,
-                error_kind_str(err->kind), err->message);
-    } else if (err->filename && err->line > 0) {
-        fprintf(stderr, "%s:%u: %s: %s\n",
-                err->filename, err->line,
-                error_kind_str(err->kind), err->message);
-    } else if (err->filename) {
-        fprintf(stderr, "%s: %s: %s\n",
-                err->filename,
-                error_kind_str(err->kind), err->message);
-    } else {
-        fprintf(stderr, "%s: %s\n",
-                error_kind_str(err->kind), err->message);
-    }
+    char loc[512];
+    fprintf(stderr, "%s%s: %s\n",
+            location_prefix(err, loc, sizeof loc),
+            error_kind_str(err->kind), err->message);
 }
