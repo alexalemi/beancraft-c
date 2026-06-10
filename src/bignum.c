@@ -547,6 +547,7 @@ Bignum bignum_from_string(const char *s) {
 
     // For larger numbers, multiply-add digit by digit
     Bignum result = bignum_zero();
+    Bignum ten = bignum_from_u64(10);
 
     for (size_t i = 0; i < len; i++) {
         if (s[i] < '0' || s[i] > '9') {
@@ -555,19 +556,11 @@ Bignum bignum_from_string(const char *s) {
         }
 
         // result = result * 10 + digit
-        Bignum old = result;
-        Bignum mult = bignum_add(result, result);  // *2
-        Bignum mult4 = bignum_add(mult, mult);     // *4
-        Bignum mult8 = bignum_add(mult4, mult4);   // *8
-        Bignum mult10 = bignum_add(mult8, mult);   // *10
-        bignum_free(&old);
-        bignum_free(&mult);
-        bignum_free(&mult4);
-        bignum_free(&mult8);
-
+        Bignum scaled = bignum_mul(result, ten);
+        bignum_free(&result);
         Bignum digit = bignum_from_u64((uint64_t)(s[i] - '0'));
-        result = bignum_add(mult10, digit);
-        bignum_free(&mult10);
+        result = bignum_add(scaled, digit);
+        bignum_free(&scaled);
         bignum_free(&digit);
     }
 

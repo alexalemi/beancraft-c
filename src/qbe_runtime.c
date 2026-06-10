@@ -89,13 +89,16 @@ char *bc_bignum_to_string(Bignum x) {
     return bignum_to_string(x);
 }
 
-// Initialise a register to a given small value (used for REG=VALUE arguments).
+// Set a register to a given value, releasing any heap bignum it held (safe on
+// zero-initialised storage too: a tagged immediate is never freed).
 void bc_init_reg(Bignum *reg, uint64_t value) {
+    bignum_set_zero(reg);
     *reg = bignum_from_u64(value);
 }
 
-// Initialise a register from a decimal string -- arbitrary precision, so the
+// Set a register from a decimal string -- arbitrary precision, so the
 // huge Gödel numbers from `beancraft --emit-urm` work too.
 void bc_init_reg_str(Bignum *reg, const char *s) {
+    bignum_set_zero(reg);
     *reg = bignum_from_string(s);
 }

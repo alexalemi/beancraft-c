@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <poll.h>
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -782,7 +784,28 @@ void device_on_inc(uint32_t i) {
 void device_on_deb(uint32_t i) {
     switch (D.op_of[i]) {
     case DEV_CON_READ: {
-        int c = getchar();
+        int c;
+        if (D.kbd_raw) {
+            // kbd/event put stdin in non-blocking raw mode, so a momentarily
+            // empty pipe must not read as end-of-input. Take any byte already
+            // drained into the key queue first, then block in poll() until a
+            // real byte (or actual EOF) arrives.
+            uint8_t ch, code;
+            if (kq_pop(&ch, &code)) {
+                c = ch;
+            } else {
+                uint8_t b;
+                ssize_t n;
+                while ((n = read(STDIN_FILENO, &b, 1)) < 0 &&
+                       (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+                    poll(&pfd, 1, -1);
+                }
+                c = (n == 1) ? b : EOF;
+            }
+        } else {
+            c = getchar();
+        }
         if (c == EOF) {
             set_reg((int)i, 0);                     // con/read = 0 -> deb -> "eof"
         } else {

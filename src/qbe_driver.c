@@ -2,6 +2,7 @@
 // Linked with qbe_runtime.c, src/bignum.c, src/devices.c and the QBE-generated
 // code. (Compiled without -I, so it declares its externs rather than #include.)
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -45,9 +46,6 @@ int main(int argc, char *argv[]) {
     for (uint64_t i = 0; i < reg_count; i++) {
         bc_regs[i] = BC_BIGNUM_ZERO;
     }
-
-    // Wire up devices (no-op unless the program references any magic register).
-    bool uses_devices = device_init(bc_reg_names, (uint32_t)reg_count, bc_regs);
 
     // Parse command line arguments for register values
     for (int i = 1; i < argc; i++) {
@@ -95,12 +93,16 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Wire up devices AFTER the user's assignments, matching the interpreter:
+    // runtime-owned registers (screen/width, ...) win over REG=VALUE args.
+    bool uses_devices = device_init(bc_reg_names, (uint32_t)reg_count, bc_regs);
+
     // A program that does I/O is usually an interactive loop; drop the step cap
     // unless one was given explicitly.
     if (uses_devices && !steps_set) max_steps = UINT64_MAX;
 
     if (verbose) {
-        printf("Running (max %lu steps)...\n", max_steps);
+        printf("Running (max %" PRIu64 " steps)...\n", max_steps);
     }
     uint64_t steps = bc_run(max_steps);
     device_shutdown();
@@ -116,7 +118,7 @@ int main(int argc, char *argv[]) {
             printf("%s = %s\n", name, value);
             free(value);
         }
-        if (verbose) printf("\nCompleted in %lu steps\n", steps);
+        if (verbose) printf("\nCompleted in %" PRIu64 " steps\n", steps);
     }
     return 0;
 }

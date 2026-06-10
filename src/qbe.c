@@ -157,14 +157,14 @@ static void emit_reg_metadata(QbeBuffer *buf, Str **reg_names, uint32_t reg_coun
 // $bc_set_reg / $bc_get_reg: a 64-bit numeric view of a register, kept for
 // callers that want one without going through the bignum runtime.
 static void emit_reg_accessors(QbeBuffer *buf) {
-    buf_puts(buf, "# Set a register to a small immediate by index\n");
+    buf_puts(buf, "# Set a register to a 64-bit value by index. Goes through the\n");
+    buf_puts(buf, "# runtime so values past the immediate range promote to the heap\n");
+    buf_puts(buf, "# instead of being silently truncated by inline tagging.\n");
     buf_puts(buf, "export function $bc_set_reg(l %idx, l %value) {\n");
     buf_puts(buf, "@start\n");
     buf_puts(buf, "    %offset =l mul %idx, 8\n");
     buf_puts(buf, "    %ptr =l add $bc_regs, %offset\n");
-    buf_puts(buf, "    %shifted =l shl %value, 1\n");
-    buf_puts(buf, "    %tagged =l or %shifted, 1\n");
-    buf_puts(buf, "    storel %tagged, %ptr\n");
+    buf_puts(buf, "    call $bc_init_reg(l %ptr, l %value)\n");
     buf_puts(buf, "    ret\n");
     buf_puts(buf, "}\n\n");
 
