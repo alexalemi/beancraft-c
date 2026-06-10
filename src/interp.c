@@ -183,6 +183,54 @@ void interp_run(InterpState *state, uint64_t max_steps) {
     }
 }
 
+static const char *opt_op_name(IrOptOp op) {
+    switch (op) {
+    case IR_OPT_INC:      return "inc";
+    case IR_OPT_DEB:      return "deb";
+    case IR_OPT_END:      return "end";
+    case IR_OPT_ZERO:     return "zero";
+    case IR_OPT_TRANSFER: return "transfer";
+    case IR_OPT_DIVMOD:   return "divmod";
+    case IR_OPT_MULADD:   return "muladd";
+    case IR_OPT_ISZERO:   return "iszero";
+    case IR_OPT_COPY:     return "copy";
+    }
+    return "?";
+}
+
+void interp_run_trace(InterpState *state, uint64_t max_steps,
+                      uint64_t trace_limit, FILE *out) {
+    while (!state->halted && state->steps < max_steps) {
+        if (state->steps >= trace_limit) {
+            fprintf(out, "... trace limit reached; continuing silently\n");
+            interp_run(state, max_steps);
+            return;
+        }
+        if (state->pc >= state->prog->inst_count) {
+            interp_step(state);
+            continue;
+        }
+        const IrOptInst *in = &state->prog->insts[state->pc];
+        uint32_t pc = state->pc;
+
+        if (in->op == IR_OPT_END) {
+            fprintf(out, "%8" PRIu64 "  @%-4u end => halt\n", state->steps, pc);
+            interp_step(state);
+            continue;
+        }
+
+        const char *rn = state->prog->reg_names[in->reg]->data;
+        char *before = bignum_to_string(state->regs[in->reg]);
+        interp_step(state);
+        char *after = bignum_to_string(state->regs[in->reg]);
+        fprintf(out, "%8" PRIu64 "  @%-4u %-8s %s: %s -> %s   => @%u\n",
+                state->steps - 1, pc, opt_op_name(in->op), rn, before, after,
+                state->pc);
+        free(before);
+        free(after);
+    }
+}
+
 void interp_print_state(const InterpState *state) {
     printf("PC: %u, Steps: %" PRIu64 ", Halted: %s\n",
            state->pc, state->steps, state->halted ? "yes" : "no");

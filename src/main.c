@@ -58,6 +58,7 @@ static void print_usage(const char *prog) {
         "  -O, --optimize      Enable loop optimizations\n"
         "  --show-opt          Print the optimized IR (implies -O)\n"
         "  -c, --check         Run at -O0 and -O and compare results (differential test)\n"
+        "  --trace[=N]         Print each executed instruction to stderr (first N steps)\n"
         "  -h, --help          Show this help\n"
         "\n"
         "Register initialization:\n"
@@ -115,6 +116,7 @@ static struct option long_options[] = {
     {"optimize",   no_argument,       NULL, 'O'},
     {"show-opt",   no_argument,       NULL, 'P'},
     {"check",      no_argument,       NULL, 'c'},
+    {"trace",      optional_argument, NULL, 'T'},
     {"help",       no_argument,       NULL, 'h'},
     {NULL,         0,                 NULL, 0}
 };
@@ -133,6 +135,7 @@ int main(int argc, char *argv[]) {
     bool check = false;
     bool steps_set = false;
     uint64_t max_steps = DEFAULT_MAX_STEPS;
+    uint64_t trace_steps = 0;   // 0 = no tracing
 
     int opt;
     while ((opt = getopt_long(argc, argv, "vqns:lhOc", long_options, NULL)) != -1) {
@@ -174,6 +177,9 @@ int main(int argc, char *argv[]) {
             break;
         case 'c':
             check = true;
+            break;
+        case 'T':
+            trace_steps = optarg ? (uint64_t)atoll(optarg) : UINT64_MAX;
             break;
         case 'h':
             print_usage(argv[0]);
@@ -446,7 +452,11 @@ int main(int argc, char *argv[]) {
         printf("Running (max %" PRIu64 " steps)...\n", max_steps);
     }
 
-    interp_run(state, max_steps);
+    if (trace_steps > 0) {
+        interp_run_trace(state, max_steps, trace_steps, stderr);
+    } else {
+        interp_run(state, max_steps);
+    }
     device_shutdown();
 
     // Output results

@@ -6,6 +6,7 @@
 #include "bignum.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 // Default maximum steps
 #define DEFAULT_MAX_STEPS 10000000ULL
@@ -42,6 +43,12 @@ void interp_step(InterpState *state);
 
 // Execute until halt or max_steps
 void interp_run(InterpState *state, uint64_t max_steps);
+
+// Like interp_run, but print one line per executed instruction to `out`
+// (step number, pc, op, the touched register's value before/after, next pc)
+// for the first `trace_limit` steps, then continue silently.
+void interp_run_trace(InterpState *state, uint64_t max_steps,
+                      uint64_t trace_limit, FILE *out);
 
 // Print current state
 void interp_print_state(const InterpState *state);
