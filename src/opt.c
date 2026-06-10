@@ -1,6 +1,7 @@
 #include "beancraft/opt.h"
 #include "beancraft/devices.h"
 #include <stdio.h>
+#include <string.h>
 
 // ---------------------------------------------------------------------------
 // Pattern detection
@@ -277,14 +278,19 @@ Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
 //
 // (We deliberately do NOT treat `deb z A B` with `z` "never incremented" as a
 // pure jump: any named register can be set from the command line, so the
-// optimizer can't assume z stays 0.)
+// optimizer can't assume z stays 0. And `deb R X X` on any user register is
+// NOT pure either -- it still decrements R when R > 0, so e.g. the saturating
+// decrement `- x next` must survive. Only the synthetic `:nil` register, which
+// user code cannot name and nothing ever increments, makes `deb R X X` a true
+// no-op.)
 
 // Is opt instruction `i` a pure unconditional jump (no register effect, no
-// device side effect)? If so, store its target. `is_dev[r]` flags device regs.
-static bool opt_is_pure_jump(const IrOptProgram *opt, const bool *is_dev,
+// device side effect)? If so, store its target. `nil_reg` is the index of the
+// synthetic `:nil` register (UINT32_MAX if the program has none).
+static bool opt_is_pure_jump(const IrOptProgram *opt, uint32_t nil_reg,
                              uint32_t i, uint32_t *target) {
     const IrOptInst *in = &opt->insts[i];
-    if (in->op == IR_OPT_DEB && in->arg_a == in->arg_b && !is_dev[in->reg]) {
+    if (in->op == IR_OPT_DEB && in->arg_a == in->arg_b && in->reg == nil_reg) {
         *target = in->arg_a;
         return true;
     }
@@ -292,11 +298,11 @@ static bool opt_is_pure_jump(const IrOptProgram *opt, const bool *is_dev,
 }
 
 // Follow the chain of pure jumps starting at `t`; return the ultimate target.
-static uint32_t opt_thread_target(const IrOptProgram *opt, const bool *is_dev, uint32_t t) {
+static uint32_t opt_thread_target(const IrOptProgram *opt, uint32_t nil_reg, uint32_t t) {
     for (uint32_t hops = 0; hops < opt->inst_count; hops++) {
         if (t >= opt->inst_count) break;
         uint32_t next;
-        if (!opt_is_pure_jump(opt, is_dev, t, &next)) break;
+        if (!opt_is_pure_jump(opt, nil_reg, t, &next)) break;
         if (next == t) break;   // a self-loop (an actual infinite loop in the program); leave it
         t = next;
     }
@@ -304,25 +310,25 @@ static uint32_t opt_thread_target(const IrOptProgram *opt, const bool *is_dev, u
 }
 
 // Rewrite every jump target through chains of pure jumps.
-static void ir_thread_jumps(IrOptProgram *opt, const bool *is_dev) {
+static void ir_thread_jumps(IrOptProgram *opt, uint32_t nil_reg) {
     for (uint32_t i = 0; i < opt->inst_count; i++) {
         IrOptInst *inst = &opt->insts[i];
         switch (inst->op) {
         case IR_OPT_DEB:
         case IR_OPT_ISZERO:
-            inst->arg_b = opt_thread_target(opt, is_dev, inst->arg_b);
+            inst->arg_b = opt_thread_target(opt, nil_reg, inst->arg_b);
             /* fall through */
         case IR_OPT_INC:
         case IR_OPT_ZERO:
         case IR_OPT_TRANSFER:
         case IR_OPT_MULADD:
         case IR_OPT_COPY:
-            inst->arg_a = opt_thread_target(opt, is_dev, inst->arg_a);
+            inst->arg_a = opt_thread_target(opt, nil_reg, inst->arg_a);
             break;
         case IR_OPT_DIVMOD: {
             uint32_t *exits = &opt->dests[inst->dest_off + inst->dest_count];
             for (uint32_t e = 0; e < inst->arg_b; e++)
-                exits[e] = opt_thread_target(opt, is_dev, exits[e]);
+                exits[e] = opt_thread_target(opt, nil_reg, exits[e]);
             break;
         }
         default:
@@ -501,7 +507,11 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
     // A device register has side effects on inc/deb; never fold a loop over one
     // (and never thread a `deb` of one away as a no-op).
     bool *is_dev = arena_alloc_zero(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(bool));
-    for (uint32_t r = 0; r < prog->reg_count; r++) is_dev[r] = device_name_is_known(prog->reg_names[r]->data);
+    uint32_t nil_reg = UINT32_MAX;
+    for (uint32_t r = 0; r < prog->reg_count; r++) {
+        is_dev[r] = device_name_is_known(prog->reg_names[r]->data);
+        if (strcmp(prog->reg_names[r]->data, ":nil") == 0) nil_reg = r;
+    }
 
     // Pass 1: detect patterns, mark the instructions they cover as consumed.
     Pattern *patterns = arena_alloc(arena, prog->inst_count * sizeof(Pattern));
@@ -610,7 +620,7 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
     }
 
     // Pass 4: thread every jump target past chains of no-op `deb R X X` jumps.
-    ir_thread_jumps(opt, is_dev);
+    ir_thread_jumps(opt, nil_reg);
 
     // Pass 5: drop the now-unreachable no-ops (and any other dead code) and renumber.
     ir_remove_dead(opt);

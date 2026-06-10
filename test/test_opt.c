@@ -446,6 +446,19 @@ TEST(threading_removes_noop_jumps) {
     arena_free(arena);
 }
 
+TEST(threading_keeps_real_decrements) {
+    // `- x next` is a saturating decrement: it lowers to `deb x i+1 i+1`, whose
+    // two targets are equal -- but it still decrements x when x > 0, so jump
+    // threading must NOT treat it as a pure jump (only `deb :nil ...` is one).
+    static const char *SRC = "+ x\n+ x\n- x next\n+ y\n";
+    static const char *const names[] = {"x", "y"};
+    uint64_t raw[2], opt[2];
+    run_with(SRC, OPT_NONE, NULL, NULL, 0, names, raw, 2);
+    run_with(SRC, OPT_LOOPS, NULL, NULL, 0, names, opt, 2);
+    assert(raw[0] == 1 && raw[1] == 1);
+    assert(opt[0] == raw[0] && opt[1] == raw[1]);
+}
+
 TEST(transfer_and_zero_still_fold) {
     // A bare ZERO loop and a bare TRANSFER loop, neither of which is a MULADD.
     static const char *ZERO_SRC = "loop: - X done self\n";
@@ -486,6 +499,7 @@ int main(void) {
     RUN(iszero_pattern_fires);
     RUN(iszero_matches_unoptimized);
     RUN(threading_removes_noop_jumps);
+    RUN(threading_keeps_real_decrements);
 
     RUN(transfer_and_zero_still_fold);
 
