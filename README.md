@@ -54,12 +54,13 @@ Each configuration compiles into its own subdirectory of `build/`
 
 `make wasm` (with [Emscripten](https://emscripten.org/) on `PATH`) compiles the
 interpreter — parser → IR → optimizer → interpreter, no QBE backend — to a
-WebAssembly module. `web/index.html` is a small demo page that loads it: pick an
-example or type your own counter-machine program, set register values, hit Run.
-Programs that draw via `screen/*` get a 256×192 canvas below the output panes
-showing the final frame (the run is synchronous, so it's one frame — animation
-still wants the SDL build). WASM won't load over `file://`, so serve the repo
-over HTTP:
+WebAssembly module (built with Asyncify). `web/index.html` is a small demo page
+that loads it: pick an example or type your own counter-machine program, set
+register values, hit Run. Programs that draw via `screen/*` animate live on a
+256×192 canvas below the output panes — each `inc screen/flush` paints a frame
+and yields to the browser — and while a run is live your keyboard feeds
+`kbd/event` (same key encoding as the SDL backend). WASM won't load over
+`file://`, so serve the repo over HTTP:
 
 ```console
 $ make wasm && python3 -m http.server

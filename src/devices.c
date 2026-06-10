@@ -13,6 +13,14 @@
 #ifdef BC_SDL
 #include <SDL2/SDL.h>
 #endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+// Hand a frame to the page: the playground sets Module.onScreenFlush to a
+// function that blits (fb, pal, w, h) onto its canvas.
+EM_JS(void, bc_js_flush, (const uint8_t *fb, const uint32_t *pal, uint32_t w, uint32_t h), {
+    if (Module['onScreenFlush']) Module['onScreenFlush'](fb, pal, w, h);
+});
+#endif
 #include "font8x8.h"
 
 // ---------------------------------------------------------------------------
@@ -587,7 +595,10 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
 #endif
     }
 
-    // Terminal keyboard path: only when we're not driving an SDL window.
+    // Terminal keyboard path: only when we're not driving an SDL window. In
+    // the browser there is no terminal -- the page feeds keydown events in
+    // through device_push_key instead.
+#ifndef __EMSCRIPTEN__
     if (wants_kbd && !D.sdl_active) {
         if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &D.saved_tio) == 0) {
             D.tio_saved = true;
@@ -600,6 +611,9 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
         D.kbd_raw = true;
     }
+#else
+    (void)wants_kbd;
+#endif
 
 #ifdef BC_SDL
     if (wants_audio) sdl_audio_init();   // if it fails, `inc audio/play` is just a no-op
@@ -642,6 +656,11 @@ void device_shutdown(void) {
 
 const bool *device_inc_mask(void) { return D.active ? D.inc_mask : NULL; }
 const bool *device_deb_mask(void) { return D.active ? D.deb_mask : NULL; }
+
+void device_push_key(uint8_t ch, uint8_t code) {
+    if (!D.active) return;
+    kq_push(ch, code);
+}
 
 const uint8_t *device_screen_fb(uint32_t *w, uint32_t *h) {
     if (!D.active || !D.have_screen || !D.fb) return NULL;
@@ -772,9 +791,13 @@ void device_on_inc(uint32_t i) {
         if (D.sdl_active) { sdl_pump_events(); sdl_render(); screen_vsync(); break; }
 #endif
         drain_keys();
-#ifndef __EMSCRIPTEN__
-        // In the browser the run is synchronous and nothing displays until it
-        // ends, so rendering ANSI or sleeping for vsync would only waste time.
+#ifdef __EMSCRIPTEN__
+        // Hand the frame to the page, then yield via Asyncify: the browser
+        // paints the canvas and delivers keyboard events (device_push_key)
+        // before the run resumes -- live animation at ~60 Hz.
+        if (D.have_screen) bc_js_flush(D.fb, D.pal, D.scr_w, D.scr_h);
+        emscripten_sleep(16);
+#else
         if (D.have_screen) { if (D.alt_screen) term_render(); screen_vsync(); }
 #endif
         break;

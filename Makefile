@@ -82,10 +82,13 @@ clean:
 # and open /web/index.html -- WASM won't load over file://.
 WASM_LIB = arena str lexer parser ast loader ir opt interp bignum error devices
 WASM_SRCS = $(WASM_LIB:%=$(SRCDIR)/%.c) web/wasm_main.c
+# ASYNCIFY lets screen/flush call emscripten_sleep, suspending the run so the
+# browser can paint the canvas and deliver keyboard events: live animation.
 WASM_FLAGS = -O2 -I include \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createBeancraft \
   -sEXIT_RUNTIME=0 -sINVOKE_RUN=0 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web \
-  -sEXPORTED_FUNCTIONS=_bc_run_source,_bc_free,_bc_fb_width,_bc_fb_height,_bc_fb_rgba,_malloc,_free \
+  -sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 \
+  -sEXPORTED_FUNCTIONS=_bc_run_source,_bc_free,_bc_fb_width,_bc_fb_height,_bc_fb_rgba,_bc_push_key,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8
 
 wasm:

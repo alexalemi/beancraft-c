@@ -42,6 +42,11 @@ const bool *device_deb_mask(void);
 void device_on_inc(uint32_t reg_index);  // run the trigger for reg[reg_index]
 void device_on_deb(uint32_t reg_index);  // run the poll for reg[reg_index]
 
+// Inject a keyboard event from the host (used by the wasm playground, where
+// the page forwards browser keydown events; mirrors the SDL/terminal queues:
+// printable keys ch == code == byte, arrows ch=0 code=1..4).
+void device_push_key(uint8_t ch, uint8_t code);
+
 // Read-only view of the screen back buffer (palette indices, row-major) and
 // the 256-entry 0xRRGGBB palette. Valid until device_shutdown; fb is NULL if
 // no screen device is active. Used by the wasm host to draw the final frame.

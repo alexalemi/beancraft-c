@@ -62,6 +62,12 @@ uint32_t EMSCRIPTEN_KEEPALIVE bc_fb_width(void)  { return g_fb_w; }
 uint32_t EMSCRIPTEN_KEEPALIVE bc_fb_height(void) { return g_fb_h; }
 uint8_t *EMSCRIPTEN_KEEPALIVE bc_fb_rgba(void)   { return g_fb_rgba; }
 
+// Browser keydown -> the device key queue (read by `deb kbd/event`). The page
+// calls this while a run is suspended in the screen/flush Asyncify yield.
+void EMSCRIPTEN_KEEPALIVE bc_push_key(int ch, int code) {
+    device_push_key((uint8_t)ch, (uint8_t)code);
+}
+
 static void snapshot_screen(void) {
     free(g_fb_rgba);
     g_fb_rgba = NULL;

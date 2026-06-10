@@ -105,11 +105,11 @@
   </div>
 
   <footer>
-    Built with <code>make wasm</code> (Emscripten). The QBE → native compiler in
-    beancraft can't run client-side, so this is the interpreter only. Programs that
-    draw via <code>screen/*</code> show their <em>final</em> frame above — the run is
-    synchronous, so animated demos (<code>life.bc</code>, <code>pong.bc</code>, …)
-    still want the SDL build; see the README.
+    Built with <code>make wasm</code> (Emscripten, Asyncify). The QBE → native compiler
+    in beancraft can't run client-side, so this is the interpreter only. Programs that
+    draw via <code>screen/*</code> animate live on the canvas above — every
+    <code>inc screen/flush</code> paints a frame and yields — and while a run is live,
+    your keyboard feeds <code>kbd/event</code>. Runs end at halt or the step cap.
   </footer>
 </main>
 
@@ -203,6 +203,24 @@ loop:   - N result
         - Even setOne loop
 result:
 ` },
+  "Bounce — live animation": { args: "", src: `# A red pixel walking diagonally, wrapping; leaves a trail. Live at ~60 Hz —
+# every 'inc screen/flush' paints the canvas. Press any key to stop (or let
+# the step cap end it).
+func addn N R {          # R += N
+  l: - N d
+  + R l
+  d:
+}
+
+addn 196 screen/color    # a bright red from the colour cube
+
+loop: inc screen/plot    # plot (screen/x mod W, screen/y mod H) in screen/color
+      inc screen/x
+      inc screen/y
+      inc screen/flush   # paint + yield to the browser
+      deb kbd/event loop quit
+quit:
+` },
   "Screen — draw a frame": { args: "", src: `# Draw to the 256x192 framebuffer; the final frame appears below the panes.
 func addn N R {        # R += N
   loop: - N done
@@ -269,20 +287,48 @@ let stdoutBuf = "";
 const Module = await createBeancraft({
   print:    (s) => { stdoutBuf += s + "\n"; },
   printErr: (s) => { stdoutBuf += s + "\n"; console.warn("[beancraft]", s); },
+  stdin:    () => null,   // never prompt() for terminal input
+  // Called from inside the run on every `inc screen/flush` (the Asyncify
+  // yield then lets the browser actually paint): live animation.
+  onScreenFlush: (fbPtr, palPtr, w, h) => blitIndexed(fbPtr, palPtr, w, h),
 });
-const bc_run_source = Module.cwrap("bc_run_source", "number", ["string", "string", "number"]);
+// bc_run_source can suspend in screen/flush (Asyncify), so it returns a Promise.
+const bc_run_source = Module.cwrap("bc_run_source", "number",
+                                   ["string", "string", "number"], { async: true });
 const bc_free       = Module.cwrap("bc_free", null, ["number"]);
 const bc_fb_width   = Module.cwrap("bc_fb_width", "number", []);
 const bc_fb_height  = Module.cwrap("bc_fb_height", "number", []);
 const bc_fb_rgba    = Module.cwrap("bc_fb_rgba", "number", []);
+const bc_push_key   = Module.cwrap("bc_push_key", null, ["number", "number"]);
 
-// Draw the final framebuffer snapshot (if the program used the screen device).
+// Blit a palette-indexed framebuffer (fb: w*h bytes, pal: 256 x 0xRRGGBB) onto
+// the canvas. Views are taken fresh each call: memory growth invalidates them.
+function blitIndexed(fbPtr, palPtr, w, h) {
+  const fb = Module.HEAPU8.subarray(fbPtr, fbPtr + w * h);
+  const pal = new Uint32Array(Module.HEAPU8.buffer, palPtr, 256);
+  const img = new ImageData(w, h);
+  const d = img.data;
+  for (let i = 0; i < w * h; i++) {
+    const c = pal[fb[i]];
+    d[i * 4]     = (c >> 16) & 255;
+    d[i * 4 + 1] = (c >> 8) & 255;
+    d[i * 4 + 2] = c & 255;
+    d[i * 4 + 3] = 255;
+  }
+  const cv = $("screen");
+  if (cv.width !== w) cv.width = w;
+  if (cv.height !== h) cv.height = h;
+  cv.getContext("2d").putImageData(img, 0, 0);
+  $("screenPane").style.display = "";
+}
+
+// Draw the final framebuffer snapshot (covers programs that drew but never
+// flushed; live frames already went through blitIndexed).
 function drawScreen() {
   const w = bc_fb_width(), h = bc_fb_height();
   const pane = $("screenPane");
   if (!w || !h) { pane.style.display = "none"; return; }
   const ptr = bc_fb_rgba();
-  // Copy out of the wasm heap: the view is invalidated if memory grows.
   const px = new Uint8ClampedArray(Module.HEAPU8.subarray(ptr, ptr + w * h * 4));
   const cv = $("screen");
   cv.width = w; cv.height = h;
@@ -290,32 +336,59 @@ function drawScreen() {
   pane.style.display = "";
 }
 
+// While a run is live, forward keydown to the device key queue using the same
+// encoding as the SDL/terminal backends: printable -> (byte, byte), control
+// keys -> their ASCII code, arrows -> (0, 1..4).
+let running = false;
+const KEYMAP = { Enter: 13, Escape: 27, Backspace: 8, Tab: 9, Delete: 127,
+                 ArrowUp: [0, 1], ArrowDown: [0, 2], ArrowLeft: [0, 3], ArrowRight: [0, 4] };
+window.addEventListener("keydown", (e) => {
+  if (!running || e.ctrlKey || e.metaKey || e.altKey) return;
+  let ch, code;
+  if (e.key.length === 1) {
+    const b = e.key.charCodeAt(0);
+    if (b > 255) return;
+    ch = code = b;
+  } else if (e.key in KEYMAP) {
+    const m = KEYMAP[e.key];
+    [ch, code] = Array.isArray(m) ? m : [m, m];
+  } else {
+    return;
+  }
+  e.preventDefault();
+  bc_push_key(ch, code);
+});
+
 statusEl.textContent = "ready";
 runBtn.disabled = false;
 
-function run() {
+async function run() {
+  if (running) return;
   runBtn.disabled = true;
-  statusEl.textContent = "running…";
+  running = true;
+  statusEl.textContent = "running… (keys go to kbd/event)";
   outEl.classList.remove("err"); resEl.classList.remove("err");
   outEl.textContent = ""; resEl.textContent = "";
-  // defer one tick so the UI updates before the (synchronous) run blocks the thread
-  setTimeout(() => {
-    stdoutBuf = "";
-    const src = srcEl.value, args = argsEl.value.trim();
-    const maxSteps = Math.max(1, Math.floor(Number(stepsEl.value) || 0)) | 0;
-    const t0 = performance.now();
-    let result = "";
-    const ptr = bc_run_source(src, args, maxSteps);
-    try { result = Module.UTF8ToString(ptr); } finally { if (ptr) bc_free(ptr); }
-    const ms = (performance.now() - t0).toFixed(1);
 
-    outEl.textContent = stdoutBuf || "(no console output)";
-    resEl.textContent = result || "(no registers)";
-    if (result.startsWith("error:")) resEl.classList.add("err");
-    drawScreen();
-    statusEl.textContent = `done in ${ms} ms`;
-    runBtn.disabled = false;
-  }, 0);
+  stdoutBuf = "";
+  const src = srcEl.value, args = argsEl.value.trim();
+  const maxSteps = Math.max(1, Math.floor(Number(stepsEl.value) || 0)) | 0;
+  const t0 = performance.now();
+  let result = "";
+  try {
+    const ptr = await bc_run_source(src, args, maxSteps);
+    try { result = Module.UTF8ToString(ptr); } finally { if (ptr) bc_free(ptr); }
+  } finally {
+    running = false;
+  }
+  const ms = (performance.now() - t0).toFixed(1);
+
+  outEl.textContent = stdoutBuf || "(no console output)";
+  resEl.textContent = result || "(no registers)";
+  if (result.startsWith("error:")) resEl.classList.add("err");
+  drawScreen();
+  statusEl.textContent = `done in ${ms} ms`;
+  runBtn.disabled = false;
 }
 runBtn.addEventListener("click", run);
 // Ctrl/Cmd+Enter from the textarea runs.
