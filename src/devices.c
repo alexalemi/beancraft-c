@@ -183,9 +183,18 @@ typedef struct {
     struct { uint8_t ch, code; } kq[256];
     int kq_head, kq_tail;
 
-    // mouse (filled by the SDL event pump; the terminal backend never updates it)
+    // mouse (filled by the SDL event pump or device_set_mouse from the wasm
+    // host; the terminal backend never updates it)
     uint32_t mouse_x, mouse_y, mouse_buttons;
     bool mouse_changed;
+
+    // console input fed by the host (wasm playground): a byte queue for
+    // con/read plus an end-of-input flag, and an optional host abort flag so
+    // a blocked read can be interrupted.
+    uint8_t in_q[1024];
+    int in_head, in_tail;
+    bool in_eof;
+    const volatile bool *stop_flag;
 
 #ifdef BC_SDL
     SDL_Window   *sdl_win;
@@ -662,6 +671,35 @@ void device_push_key(uint8_t ch, uint8_t code) {
     kq_push(ch, code);
 }
 
+void device_set_mouse(uint32_t x, uint32_t y, uint32_t buttons) {
+    if (!D.active) return;
+    D.mouse_x = x;
+    D.mouse_y = y;
+    D.mouse_buttons = buttons;
+    D.mouse_changed = true;
+}
+
+void device_push_input(uint8_t byte) {
+    if (!D.active) return;
+    int next = (D.in_tail + 1) % (int)sizeof(D.in_q);
+    if (next != D.in_head) { D.in_q[D.in_tail] = byte; D.in_tail = next; }
+}
+
+void device_input_close(void) { D.in_eof = true; }
+
+void device_set_stop_flag(const volatile bool *flag) { D.stop_flag = flag; }
+
+#ifdef __EMSCRIPTEN__
+// Only the browser con/read path consumes the queue; the native one reads
+// stdin directly.
+static bool in_q_pop(uint8_t *byte) {
+    if (D.in_head == D.in_tail) return false;
+    *byte = D.in_q[D.in_head];
+    D.in_head = (D.in_head + 1) % (int)sizeof(D.in_q);
+    return true;
+}
+#endif
+
 const uint8_t *device_screen_fb(uint32_t *w, uint32_t *h) {
     if (!D.active || !D.have_screen || !D.fb) return NULL;
     *w = D.scr_w;
@@ -808,6 +846,16 @@ void device_on_deb(uint32_t i) {
     switch (D.op_of[i]) {
     case DEV_CON_READ: {
         int c;
+#ifdef __EMSCRIPTEN__
+        // Browser: bytes come from the page via device_push_input. Wait in an
+        // Asyncify yield until a byte, end-of-input, or a Stop click arrives.
+        for (;;) {
+            uint8_t b;
+            if (in_q_pop(&b)) { c = b; break; }
+            if (D.in_eof || (D.stop_flag && *D.stop_flag)) { c = EOF; break; }
+            emscripten_sleep(16);
+        }
+#else
         if (D.kbd_raw) {
             // kbd/event put stdin in non-blocking raw mode, so a momentarily
             // empty pipe must not read as end-of-input. Take any byte already
@@ -829,6 +877,7 @@ void device_on_deb(uint32_t i) {
         } else {
             c = getchar();
         }
+#endif
         if (c == EOF) {
             set_reg((int)i, 0);                     // con/read = 0 -> deb -> "eof"
         } else {

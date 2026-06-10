@@ -106,7 +106,7 @@ WASM_FLAGS = -O2 -I include \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createBeancraft \
   -sEXIT_RUNTIME=0 -sINVOKE_RUN=0 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web \
   -sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 \
-  -sEXPORTED_FUNCTIONS=_bc_run_source,_bc_free,_bc_fb_width,_bc_fb_height,_bc_fb_rgba,_bc_push_key,_bc_request_stop,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_bc_run_source,_bc_free,_bc_fb_width,_bc_fb_height,_bc_fb_rgba,_bc_push_key,_bc_set_mouse,_bc_push_input,_bc_input_close,_bc_request_stop,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8
 
 wasm:

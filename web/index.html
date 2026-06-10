@@ -101,8 +101,15 @@
     </div>
   </div>
 
+  <div class="row">
+    <label for="conIn">Console input <small>(con/read)</small></label>
+    <input type="text" id="conIn" placeholder="type a line, Enter or Send queues it…" disabled autocomplete="off">
+    <button id="conSend" disabled>Send</button>
+    <button id="conEof" class="stop" disabled>EOF</button>
+  </div>
+
   <div class="pane" id="screenPane" style="display:none; margin-top:1rem">
-    <h2>Screen <small style="text-transform:none;letter-spacing:0">(final frame, 256×192)</small></h2>
+    <h2>Screen <small style="text-transform:none;letter-spacing:0">(live, 256×192 — clicks &amp; movement feed mouse/*)</small></h2>
     <canvas id="screen"></canvas>
   </div>
 
@@ -111,7 +118,8 @@
     in beancraft can't run client-side, so this is the interpreter only. Programs that
     draw via <code>screen/*</code> animate live on the canvas above — every
     <code>inc screen/flush</code> paints a frame and yields — and while a run is live,
-    your keyboard feeds <code>kbd/event</code>. Runs end at halt, the step cap, or
+    your keyboard feeds <code>kbd/event</code>, the canvas feeds <code>mouse/*</code>,
+    and the input box feeds <code>con/read</code>. Runs end at halt, the step cap, or
     the Stop button (the run yields between work chunks, so even a tight compute
     loop stays interruptible).
   </footer>
@@ -254,6 +262,13 @@ inc screen/text
 
 inc screen/flush
 ` },
+  "Echo — interactive cat": { args: "", src: `# echo console input back, byte by byte, until EOF.
+# Type a line in the "Console input" box below and press Send; the EOF
+# button (or Stop) ends the run.
+loop: deb con/read done emit      # read a byte: EOF -> done; got one -> emit
+emit: inc con/emit loop           # write con/byte to the output pane
+done:
+` },
   "Hello — print \"Hi\"": { args: "", src: `# print "Hi\\n" via the console device
 func addn N R {        # R += N
   loop: - N done
@@ -271,7 +286,8 @@ inc con/emit
 const $ = (id) => document.getElementById(id);
 const exampleSel = $("example"), srcEl = $("src"), argsEl = $("args"),
       stepsEl = $("steps"), runBtn = $("run"), stopBtn = $("stop"),
-      statusEl = $("status"), outEl = $("out"), resEl = $("result");
+      statusEl = $("status"), outEl = $("out"), resEl = $("result"),
+      conIn = $("conIn"), conSend = $("conSend"), conEof = $("conEof");
 
 for (const name of Object.keys(EXAMPLES)) {
   const o = document.createElement("option");
@@ -288,9 +304,15 @@ loadExample(exampleSel.value);
 
 // ---- instantiate the WASM module ------------------------------------------
 let stdoutBuf = "";
+// While a run is suspended in an Asyncify yield the browser paints, so
+// updating the output pane from the print callback makes con/emit live.
+const liveOut = (s) => {
+  stdoutBuf += s + "\n";
+  if (running) outEl.textContent = stdoutBuf;
+};
 const Module = await createBeancraft({
-  print:    (s) => { stdoutBuf += s + "\n"; },
-  printErr: (s) => { stdoutBuf += s + "\n"; console.warn("[beancraft]", s); },
+  print:    liveOut,
+  printErr: (s) => { liveOut(s); console.warn("[beancraft]", s); },
   stdin:    () => null,   // never prompt() for terminal input
   // Called from inside the run on every `inc screen/flush` (the Asyncify
   // yield then lets the browser actually paint): live animation.
@@ -304,6 +326,9 @@ const bc_fb_width   = Module.cwrap("bc_fb_width", "number", []);
 const bc_fb_height  = Module.cwrap("bc_fb_height", "number", []);
 const bc_fb_rgba    = Module.cwrap("bc_fb_rgba", "number", []);
 const bc_push_key   = Module.cwrap("bc_push_key", null, ["number", "number"]);
+const bc_set_mouse  = Module.cwrap("bc_set_mouse", null, ["number", "number", "number"]);
+const bc_push_input = Module.cwrap("bc_push_input", null, ["number"]);
+const bc_input_close = Module.cwrap("bc_input_close", null, []);
 const bc_request_stop = Module.cwrap("bc_request_stop", null, []);
 
 // Blit a palette-indexed framebuffer (fb: w*h bytes, pal: 256 x 0xRRGGBB) onto
@@ -349,6 +374,8 @@ const KEYMAP = { Enter: 13, Escape: 27, Backspace: 8, Tab: 9, Delete: 127,
                  ArrowUp: [0, 1], ArrowDown: [0, 2], ArrowLeft: [0, 3], ArrowRight: [0, 4] };
 window.addEventListener("keydown", (e) => {
   if (!running || e.ctrlKey || e.metaKey || e.altKey) return;
+  // Typing in a form field (notably the console-input box) is not game input.
+  if (e.target.closest("input, textarea, select")) return;
   let ch, code;
   if (e.key.length === 1) {
     const b = e.key.charCodeAt(0);
@@ -364,6 +391,39 @@ window.addEventListener("keydown", (e) => {
   bc_push_key(ch, code);
 });
 
+// Console input box -> the con/read byte queue (UTF-8 bytes + newline).
+function sendConsole() {
+  if (!running) return;
+  for (const b of new TextEncoder().encode(conIn.value + "\n")) bc_push_input(b);
+  conIn.value = "";
+}
+conSend.addEventListener("click", sendConsole);
+conIn.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); sendConsole(); }
+});
+conEof.addEventListener("click", () => { if (running) bc_input_close(); });
+
+// Canvas pointer events -> the mouse device, in framebuffer coordinates.
+// DOM e.buttons is 1=left 2=right 4=middle; SDL (what programs expect) is
+// 1=left 2=middle 4=right.
+{
+  const cv = $("screen");
+  const fwd = (e) => {
+    if (!running || !cv.width) return;
+    const rect = cv.getBoundingClientRect();
+    const x = Math.max(0, Math.min(cv.width - 1,
+              Math.floor((e.clientX - rect.left) / rect.width * cv.width)));
+    const y = Math.max(0, Math.min(cv.height - 1,
+              Math.floor((e.clientY - rect.top) / rect.height * cv.height)));
+    const b = (e.buttons & 1) | ((e.buttons & 4) ? 2 : 0) | ((e.buttons & 2) ? 4 : 0);
+    bc_set_mouse(x, y, b);
+  };
+  cv.addEventListener("mousemove", fwd);
+  cv.addEventListener("mousedown", fwd);
+  cv.addEventListener("mouseup", fwd);
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
 statusEl.textContent = "ready";
 runBtn.disabled = false;
 
@@ -371,6 +431,7 @@ async function run() {
   if (running) return;
   runBtn.disabled = true;
   stopBtn.disabled = false;
+  conIn.disabled = conSend.disabled = conEof.disabled = false;
   running = true;
   statusEl.textContent = "running… (keys go to kbd/event)";
   outEl.classList.remove("err"); resEl.classList.remove("err");
@@ -387,6 +448,7 @@ async function run() {
   } finally {
     running = false;
     stopBtn.disabled = true;
+    conIn.disabled = conSend.disabled = conEof.disabled = true;
   }
   const ms = (performance.now() - t0).toFixed(1);
 

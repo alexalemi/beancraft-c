@@ -47,6 +47,18 @@ void device_on_deb(uint32_t reg_index);  // run the poll for reg[reg_index]
 // printable keys ch == code == byte, arrows ch=0 code=1..4).
 void device_push_key(uint8_t ch, uint8_t code);
 
+// Update the mouse state from the host (wasm: canvas pointer events; buttons
+// uses the SDL bitmask -- 1 left, 2 middle, 4 right). Picked up by the next
+// `deb mouse/event` poll.
+void device_set_mouse(uint32_t x, uint32_t y, uint32_t buttons);
+
+// Console input from the host for `con/read` (wasm: the page's input box).
+// push queues a byte; close marks end-of-input; the stop flag, if set, lets a
+// read blocked in the Asyncify wait bail out (the playground's Stop button).
+void device_push_input(uint8_t byte);
+void device_input_close(void);
+void device_set_stop_flag(const volatile bool *flag);
+
 // Read-only view of the screen back buffer (palette indices, row-major) and
 // the 256-entry 0xRRGGBB palette. Valid until device_shutdown; fb is NULL if
 // no screen device is active. Used by the wasm host to draw the final frame.

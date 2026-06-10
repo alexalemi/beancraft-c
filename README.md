@@ -58,9 +58,11 @@ WebAssembly module (built with Asyncify). `web/index.html` is a small demo page
 that loads it: pick an example or type your own counter-machine program, set
 register values, hit Run. Programs that draw via `screen/*` animate live on a
 256×192 canvas below the output panes — each `inc screen/flush` paints a frame
-and yields to the browser — and while a run is live your keyboard feeds
-`kbd/event` (same key encoding as the SDL backend). WASM won't load over
-`file://`, so serve the repo over HTTP:
+and yields to the browser. While a run is live, your keyboard feeds `kbd/event`
+(same key encoding as the SDL backend), pointer events over the canvas feed
+`mouse/*`, and the console-input box feeds `con/read` (which blocks until you
+Send a line, press EOF, or Stop). Console output streams live. WASM won't load
+over `file://`, so serve the repo over HTTP:
 
 ```console
 $ make wasm && python3 -m http.server

@@ -69,9 +69,26 @@ void EMSCRIPTEN_KEEPALIVE bc_push_key(int ch, int code) {
     device_push_key((uint8_t)ch, (uint8_t)code);
 }
 
+// Canvas pointer events -> the mouse device (read by `deb mouse/event`).
+// buttons already remapped to the SDL bitmask by the page.
+void EMSCRIPTEN_KEEPALIVE bc_set_mouse(int x, int y, int buttons) {
+    device_set_mouse((uint32_t)x, (uint32_t)y, (uint32_t)buttons);
+}
+
+// The page's console-input box -> the con/read byte queue; bc_input_close
+// marks end-of-input (the "EOF" button), unblocking a waiting read.
+void EMSCRIPTEN_KEEPALIVE bc_push_input(int byte) {
+    device_push_input((uint8_t)byte);
+}
+
+void EMSCRIPTEN_KEEPALIVE bc_input_close(void) {
+    device_input_close();
+}
+
 // The Stop button. The flag can only be set while the run is suspended in an
-// Asyncify yield -- either a screen/flush or the periodic between-chunk yield
-// in bc_run_source -- which is exactly when the click handler gets to run.
+// Asyncify yield -- a screen/flush, a con/read wait, or the periodic
+// between-chunk yield in bc_run_source -- which is exactly when the click
+// handler gets to run.
 static volatile bool g_stop_requested = false;
 
 void EMSCRIPTEN_KEEPALIVE bc_request_stop(void) {
@@ -161,6 +178,7 @@ char *EMSCRIPTEN_KEEPALIVE bc_run_source(const char *source,
     if (device_init(dev_names, opt->reg_count, st->regs)) {
         st->inc_mask = device_inc_mask();
         st->deb_mask = device_deb_mask();
+        device_set_stop_flag(&g_stop_requested);   // unblocks a waiting con/read
     }
 
     // Run in chunks with an Asyncify yield between them: the browser is
