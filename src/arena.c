@@ -1,4 +1,5 @@
 #include "beancraft/arena.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -56,17 +57,24 @@ static inline size_t align_up(size_t n, size_t align) {
 void *arena_alloc_aligned(Arena *arena, size_t size, size_t align) {
     ArenaBlock *block = arena->current;
 
-    // Align the current position
-    size_t aligned_used = align_up(block->used, align);
+    // Align the *address*, not the offset: block->data sits right after the
+    // header, so an aligned offset only yields an address as aligned as the
+    // header size happens to be (4 bytes on wasm32 -- too little for u64s).
+    uintptr_t base = (uintptr_t)block->data;
+    size_t aligned_used = (size_t)(align_up(base + block->used, align) - base);
 
-    // Check if it fits in current block
-    if (aligned_used + size <= block->size) {
+    // Check if it fits in the current block (without size_t wrap-around)
+    if (aligned_used <= block->size && size <= block->size - aligned_used) {
         void *ptr = block->data + aligned_used;
         block->used = aligned_used + size;
         return ptr;
     }
 
     // Need a new block - make it at least big enough for this allocation
+    if (size > SIZE_MAX - align - sizeof(ArenaBlock)) {
+        fprintf(stderr, "beancraft: out of memory\n");
+        abort();
+    }
     size_t new_size = arena->default_block_size;
     if (size + align > new_size) {
         new_size = size + align;
@@ -76,7 +84,8 @@ void *arena_alloc_aligned(Arena *arena, size_t size, size_t align) {
     block->next = new_block;
     arena->current = new_block;
 
-    size_t new_aligned = align_up(0, align);
+    uintptr_t nbase = (uintptr_t)new_block->data;
+    size_t new_aligned = (size_t)(align_up(nbase, align) - nbase);
     void *ptr = new_block->data + new_aligned;
     new_block->used = new_aligned + size;
     return ptr;
