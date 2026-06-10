@@ -53,6 +53,38 @@ static char *fail(Arena *arena, const BcError *err) {
     return buf_take(&b);
 }
 
+// Final-frame snapshot of the screen device, taken just before shutdown so the
+// page can draw it on a canvas after the (synchronous) run finishes.
+static uint8_t *g_fb_rgba = NULL;   // w*h*4 bytes, row-major RGBA
+static uint32_t g_fb_w = 0, g_fb_h = 0;
+
+uint32_t EMSCRIPTEN_KEEPALIVE bc_fb_width(void)  { return g_fb_w; }
+uint32_t EMSCRIPTEN_KEEPALIVE bc_fb_height(void) { return g_fb_h; }
+uint8_t *EMSCRIPTEN_KEEPALIVE bc_fb_rgba(void)   { return g_fb_rgba; }
+
+static void snapshot_screen(void) {
+    free(g_fb_rgba);
+    g_fb_rgba = NULL;
+    g_fb_w = g_fb_h = 0;
+
+    uint32_t w, h;
+    const uint8_t *fb = device_screen_fb(&w, &h);
+    if (!fb) return;
+    const uint32_t *pal = device_screen_palette();
+    uint8_t *rgba = malloc((size_t)w * h * 4);
+    if (!rgba) return;
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        uint32_t c = pal[fb[i]];
+        rgba[i * 4 + 0] = (uint8_t)(c >> 16);
+        rgba[i * 4 + 1] = (uint8_t)(c >> 8);
+        rgba[i * 4 + 2] = (uint8_t)c;
+        rgba[i * 4 + 3] = 0xff;
+    }
+    g_fb_rgba = rgba;
+    g_fb_w = w;
+    g_fb_h = h;
+}
+
 // Run a beancraft program given as a source string, with the optimizer on.
 //
 //   source           the .bc program text
@@ -139,6 +171,7 @@ char *EMSCRIPTEN_KEEPALIVE bc_run_source(const char *source,
         free(val);
     }
 
+    snapshot_screen();   // before shutdown frees the framebuffer
     interp_cleanup(st);
     device_shutdown();
     arena_free(arena);

@@ -42,4 +42,10 @@ const bool *device_deb_mask(void);
 void device_on_inc(uint32_t reg_index);  // run the trigger for reg[reg_index]
 void device_on_deb(uint32_t reg_index);  // run the poll for reg[reg_index]
 
+// Read-only view of the screen back buffer (palette indices, row-major) and
+// the 256-entry 0xRRGGBB palette. Valid until device_shutdown; fb is NULL if
+// no screen device is active. Used by the wasm host to draw the final frame.
+const uint8_t *device_screen_fb(uint32_t *w, uint32_t *h);
+const uint32_t *device_screen_palette(void);
+
 #endif // BC_DEVICES_H

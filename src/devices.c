@@ -557,6 +557,13 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     if (wants_screen) {
         D.have_screen = true;
         init_palette();
+#ifdef __EMSCRIPTEN__
+        // No real terminal in the browser: pick a canvas-friendly resolution
+        // and skip the ANSI renderer entirely (the page draws the final frame
+        // from device_screen_fb after the run).
+        D.scr_w = 256;
+        D.scr_h = 192;
+#else
         uint32_t cols = 64, rows = 24;
         struct winsize ws;
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 1) {
@@ -564,15 +571,18 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
         }
         D.scr_w = cols;
         D.scr_h = rows * 2;
+#endif
         D.fb = calloc((size_t)D.scr_w * D.scr_h, 1);
         set_reg(D.i_scr_w, D.scr_w);
         set_reg(D.i_scr_h, D.scr_h);
         clock_gettime(CLOCK_MONOTONIC, &D.last_flush);
+#ifndef __EMSCRIPTEN__
         if (isatty(STDOUT_FILENO)) {
             fputs("\x1b[?1049h\x1b[?25l\x1b[2J", stdout);
             fflush(stdout);
             D.alt_screen = true;
         }
+#endif
     }
 
     // Terminal keyboard path: only when we're not driving an SDL window.
@@ -630,6 +640,15 @@ void device_shutdown(void) {
 
 const bool *device_inc_mask(void) { return D.active ? D.inc_mask : NULL; }
 const bool *device_deb_mask(void) { return D.active ? D.deb_mask : NULL; }
+
+const uint8_t *device_screen_fb(uint32_t *w, uint32_t *h) {
+    if (!D.active || !D.have_screen || !D.fb) return NULL;
+    *w = D.scr_w;
+    *h = D.scr_h;
+    return D.fb;
+}
+
+const uint32_t *device_screen_palette(void) { return D.pal; }
 
 // ---------------------------------------------------------------------------
 // The hooks
@@ -751,7 +770,11 @@ void device_on_inc(uint32_t i) {
         if (D.sdl_active) { sdl_pump_events(); sdl_render(); screen_vsync(); break; }
 #endif
         drain_keys();
+#ifndef __EMSCRIPTEN__
+        // In the browser the run is synchronous and nothing displays until it
+        // ends, so rendering ANSI or sleeping for vsync would only waste time.
         if (D.have_screen) { if (D.alt_screen) term_render(); screen_vsync(); }
+#endif
         break;
     }
 }

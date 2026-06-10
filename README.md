@@ -56,7 +56,10 @@ Each configuration compiles into its own subdirectory of `build/`
 interpreter — parser → IR → optimizer → interpreter, no QBE backend — to a
 WebAssembly module. `web/index.html` is a small demo page that loads it: pick an
 example or type your own counter-machine program, set register values, hit Run.
-WASM won't load over `file://`, so serve the repo over HTTP:
+Programs that draw via `screen/*` get a 256×192 canvas below the output panes
+showing the final frame (the run is synchronous, so it's one frame — animation
+still wants the SDL build). WASM won't load over `file://`, so serve the repo
+over HTTP:
 
 ```console
 $ make wasm && python3 -m http.server

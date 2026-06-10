@@ -54,6 +54,10 @@
     white-space: pre-wrap; word-break: break-all; min-height: 5rem; color: var(--code);
   }
   pre.err { color: var(--err); }
+  #screen {
+    width: 100%; image-rendering: pixelated; display: block;
+    background: #000; border: 1px solid var(--line); border-radius: 8px;
+  }
   footer { color: var(--dim); margin-top: 2rem; font-size: .85rem; }
   footer code { font-family: var(--mono); color: var(--code); }
 </style>
@@ -95,10 +99,17 @@
     </div>
   </div>
 
+  <div class="pane" id="screenPane" style="display:none; margin-top:1rem">
+    <h2>Screen <small style="text-transform:none;letter-spacing:0">(final frame, 256×192)</small></h2>
+    <canvas id="screen"></canvas>
+  </div>
+
   <footer>
     Built with <code>make wasm</code> (Emscripten). The QBE → native compiler in
-    beancraft can't run client-side, so this is the interpreter only — graphics demos
-    (<code>life.bc</code>, <code>pong.bc</code>, …) need the SDL build; see the README.
+    beancraft can't run client-side, so this is the interpreter only. Programs that
+    draw via <code>screen/*</code> show their <em>final</em> frame above — the run is
+    synchronous, so animated demos (<code>life.bc</code>, <code>pong.bc</code>, …)
+    still want the SDL build; see the README.
   </footer>
 </main>
 
@@ -192,6 +203,35 @@ loop:   - N result
         - Even setOne loop
 result:
 ` },
+  "Screen — draw a frame": { args: "", src: `# Draw to the 256x192 framebuffer; the final frame appears below the panes.
+func addn N R {        # R += N
+  loop: - N done
+  + R loop
+}
+func setn N R {        # R := N
+  clr: - R doadd self
+  doadd: addn N R
+}
+
+inc screen/clear
+
+setn 48  screen/x      # filled rectangle
+setn 40  screen/y
+setn 161 screen/color
+setn 160 screen/rectw
+setn 112 screen/recth
+inc screen/rect
+
+setn 112 screen/x      # "HI" in the built-in 8x8 font
+setn 88  screen/y
+setn 226 screen/color
+setn 72  screen/glyph
+inc screen/text
+setn 73  screen/glyph
+inc screen/text
+
+inc screen/flush
+` },
   "Hello — print \"Hi\"": { args: "", src: `# print "Hi\\n" via the console device
 func addn N R {        # R += N
   loop: - N done
@@ -232,6 +272,23 @@ const Module = await createBeancraft({
 });
 const bc_run_source = Module.cwrap("bc_run_source", "number", ["string", "string", "number"]);
 const bc_free       = Module.cwrap("bc_free", null, ["number"]);
+const bc_fb_width   = Module.cwrap("bc_fb_width", "number", []);
+const bc_fb_height  = Module.cwrap("bc_fb_height", "number", []);
+const bc_fb_rgba    = Module.cwrap("bc_fb_rgba", "number", []);
+
+// Draw the final framebuffer snapshot (if the program used the screen device).
+function drawScreen() {
+  const w = bc_fb_width(), h = bc_fb_height();
+  const pane = $("screenPane");
+  if (!w || !h) { pane.style.display = "none"; return; }
+  const ptr = bc_fb_rgba();
+  // Copy out of the wasm heap: the view is invalidated if memory grows.
+  const px = new Uint8ClampedArray(Module.HEAPU8.subarray(ptr, ptr + w * h * 4));
+  const cv = $("screen");
+  cv.width = w; cv.height = h;
+  cv.getContext("2d").putImageData(new ImageData(px, w, h), 0, 0);
+  pane.style.display = "";
+}
 
 statusEl.textContent = "ready";
 runBtn.disabled = false;
@@ -255,6 +312,7 @@ function run() {
     outEl.textContent = stdoutBuf || "(no console output)";
     resEl.textContent = result || "(no registers)";
     if (result.startsWith("error:")) resEl.classList.add("err");
+    drawScreen();
     statusEl.textContent = `done in ${ms} ms`;
     runBtn.disabled = false;
   }, 0);

@@ -1,4 +1,5 @@
 #include "beancraft/ast.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -86,7 +87,7 @@ void ast_print(const Ast *ast) {
             for (uint32_t j = 0; j < node->use.reg_mapping_count; j++) {
                 RegMapping *rm = &node->use.reg_mappings[j];
                 if (rm->is_value) {
-                    printf(" %s=%ld", rm->local->data, rm->value);
+                    printf(" %s=%" PRId64, rm->local->data, rm->value);
                 } else {
                     printf(" %s=%s", rm->local->data, rm->import->data);
                 }
@@ -110,7 +111,7 @@ void ast_print(const Ast *ast) {
             printf("call %s", node->call.name->data);
             for (uint32_t j = 0; j < node->call.arg_count; j++) {
                 if (node->call.args[j]) printf(" %s", node->call.args[j]->data);
-                else printf(" %ld", node->call.arg_values[j]);
+                else printf(" %" PRId64, node->call.arg_values[j]);
             }
             break;
         }
