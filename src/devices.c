@@ -136,7 +136,7 @@ const char *const *device_dependencies(const char *name, uint32_t *count) {
 // Runtime state
 // ---------------------------------------------------------------------------
 
-static struct {
+typedef struct {
     bool active;
     const char **names;
     Bignum *regs;
@@ -184,17 +184,23 @@ static struct {
     uint32_t     *sdl_rgb;       // scr_w*scr_h ARGB scratch for the texture
     SDL_AudioDeviceID sdl_audio; // 0 until/unless the audio device opens
 #endif
-} D = {
-    .i_sys_code = -1, .i_con_byte = -1,
-    .i_time = { -1, -1, -1, -1, -1, -1, -1, -1 },
-    .i_rand_byte = -1, .i_rand_seed = -1,
-    .i_pal_index = -1, .i_pal_r = -1, .i_pal_g = -1, .i_pal_b = -1,
-    .i_scr_x = -1, .i_scr_y = -1, .i_scr_color = -1, .i_scr_w = -1, .i_scr_h = -1,
-    .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1, .i_scr_pixel = -1,
-    .i_kbd_char = -1, .i_kbd_code = -1,
-    .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,
-    .i_audio_freq = -1, .i_audio_dur = -1,
-};
+} DevState;
+
+// Shared between the static definition and the device_shutdown reset, so a
+// later device_init (e.g. the next run in the wasm playground) starts clean.
+#define DEV_STATE_INIT {                                                      \
+    .i_sys_code = -1, .i_con_byte = -1,                                       \
+    .i_time = { -1, -1, -1, -1, -1, -1, -1, -1 },                             \
+    .i_rand_byte = -1, .i_rand_seed = -1,                                     \
+    .i_pal_index = -1, .i_pal_r = -1, .i_pal_g = -1, .i_pal_b = -1,           \
+    .i_scr_x = -1, .i_scr_y = -1, .i_scr_color = -1, .i_scr_w = -1, .i_scr_h = -1, \
+    .i_scr_row = { -1, -1, -1, -1, -1, -1, -1, -1 }, .i_scr_rectw = -1, .i_scr_recth = -1, .i_scr_glyph = -1, .i_scr_pixel = -1, \
+    .i_kbd_char = -1, .i_kbd_code = -1,                                       \
+    .i_mouse_x = -1, .i_mouse_y = -1, .i_mouse_buttons = -1,                  \
+    .i_audio_freq = -1, .i_audio_dur = -1,                                    \
+}
+
+static DevState D = DEV_STATE_INIT;
 
 static void set_reg(int idx, uint64_t value) {
     if (idx < 0) return;
@@ -587,7 +593,11 @@ bool device_init(const char **reg_names, uint32_t reg_count, Bignum *regs) {
     if (wants_audio) sdl_audio_init();   // if it fails, `inc audio/play` is just a no-op
 #endif
 
-    atexit(device_shutdown);
+    static bool atexit_registered = false;
+    if (!atexit_registered) {
+        atexit(device_shutdown);
+        atexit_registered = true;
+    }
     return true;
 }
 
@@ -596,15 +606,26 @@ void device_shutdown(void) {
     D.active = false;
 #ifdef BC_SDL
     if (!D.sdl_active) sdl_audio_close();   // audio-only program: drain & close here
-    if (D.sdl_active) { sdl_shutdown(); return; }
+    if (D.sdl_active) {
+        sdl_shutdown();
+    } else
 #endif
-    if (D.alt_screen) { fputs("\x1b[0m\x1b[?25h\x1b[?1049l", stdout); fflush(stdout); }
-    if (D.kbd_raw) {
-        int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
-        if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK);
-        if (D.tio_saved) tcsetattr(STDIN_FILENO, TCSANOW, &D.saved_tio);
+    {
+        if (D.alt_screen) { fputs("\x1b[0m\x1b[?25h\x1b[?1049l", stdout); fflush(stdout); }
+        if (D.kbd_raw) {
+            int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+            if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK);
+            if (D.tio_saved) tcsetattr(STDIN_FILENO, TCSANOW, &D.saved_tio);
+        }
+        fflush(stdout);
     }
-    fflush(stdout);
+    // Release per-run allocations and reset all state (stale register indices,
+    // queued keys, screen flags) so the next device_init starts from scratch.
+    free(D.inc_mask);
+    free(D.deb_mask);
+    free(D.op_of);
+    free(D.fb);
+    D = (DevState)DEV_STATE_INIT;
 }
 
 const bool *device_inc_mask(void) { return D.active ? D.inc_mask : NULL; }
