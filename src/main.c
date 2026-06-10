@@ -9,6 +9,7 @@
 #include "beancraft/opt.h"
 #include "beancraft/devices.h"
 #include "beancraft/error.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +57,7 @@ static void print_usage(const char *prog) {
         "  --emit-urm          Output the program (and registers) Gödel-encoded for examples/urm.bc\n"
         "  -O, --optimize      Enable loop optimizations\n"
         "  --show-opt          Print the optimized IR (implies -O)\n"
+        "  -c, --check         Run at -O0 and -O and compare results (differential test)\n"
         "  -h, --help          Show this help\n"
         "\n"
         "Register initialization:\n"
@@ -66,6 +68,38 @@ static void print_usage(const char *prog) {
         "  %s mul.bc A=7 B=8 --verbose\n"
         "  %s fib.bc --emit-qbe > fib.ssa\n",
         prog, prog, prog, prog);
+}
+
+// Apply REG=VALUE command-line assignments to one or two interpreter states
+// (b may be NULL). argv is left intact so the assignments can be re-read.
+static void apply_assignments(InterpState *a, InterpState *b,
+                              int argc, char *argv[], int from, bool verbose) {
+    for (int i = from; i < argc; i++) {
+        char *arg = argv[i];
+        char *eq = strchr(arg, '=');
+        if (!eq) {
+            fprintf(stderr, "Warning: invalid argument '%s' (expected REG=VALUE)\n", arg);
+            continue;
+        }
+
+        *eq = '\0';
+        const char *reg_name = arg;
+        const char *value_str = eq + 1;
+
+        // Parse value as an arbitrary-precision non-negative integer (so the
+        // huge Gödel numbers from --emit-urm work, not just 64-bit ones).
+        Bignum value = bignum_from_string(value_str);
+        if (!interp_set_reg_bignum(a, reg_name, value)) {
+            fprintf(stderr, "Warning: unknown register '%s'\n", reg_name);
+        } else if (verbose) {
+            char *vs = bignum_to_string(value);
+            printf("Set %s = %s\n", reg_name, vs);
+            free(vs);
+        }
+        if (b) interp_set_reg_bignum(b, reg_name, value);
+        bignum_free(&value);
+        *eq = '=';
+    }
 }
 
 static struct option long_options[] = {
@@ -80,6 +114,7 @@ static struct option long_options[] = {
     {"emit-urm",   no_argument,       NULL, 'U'},
     {"optimize",   no_argument,       NULL, 'O'},
     {"show-opt",   no_argument,       NULL, 'P'},
+    {"check",      no_argument,       NULL, 'c'},
     {"help",       no_argument,       NULL, 'h'},
     {NULL,         0,                 NULL, 0}
 };
@@ -95,11 +130,12 @@ int main(int argc, char *argv[]) {
     bool emit_urm = false;
     bool optimize = false;
     bool show_opt = false;
+    bool check = false;
     bool steps_set = false;
     uint64_t max_steps = DEFAULT_MAX_STEPS;
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "vqns:lhO", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "vqns:lhOc", long_options, NULL)) != -1) {
         switch (opt) {
         case 'v':
             verbose = true;
@@ -135,6 +171,9 @@ int main(int argc, char *argv[]) {
         case 'P':
             show_opt = true;
             optimize = true;  // "the optimized IR" only differs from --show-ir once folding is on
+            break;
+        case 'c':
+            check = true;
             break;
         case 'h':
             print_usage(argv[0]);
@@ -314,35 +353,79 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    // Differential test: run the same program and inputs at -O0 and -O and
+    // compare every register. Catches optimizer folds that change semantics.
+    if (check) {
+        for (uint32_t i = 0; i < prog->reg_count; i++) {
+            if (device_name_is_known(prog->reg_names[i]->data)) {
+                fprintf(stderr, "Error: --check cannot run device programs "
+                                "(register '%s' has side effects, and the program "
+                                "would run twice)\n", prog->reg_names[i]->data);
+                arena_free(arena);
+                return 1;
+            }
+        }
+
+        IrOptProgram *p_raw = ir_optimize(arena, prog, OPT_NONE);
+        IrOptProgram *p_opt = ir_optimize(arena, prog, OPT_LOOPS);
+        InterpState *s_raw = interp_new(arena, p_raw);
+        InterpState *s_opt = interp_new(arena, p_opt);
+        interp_init_regs(s_raw);
+        interp_init_regs(s_opt);
+        apply_assignments(s_raw, s_opt, argc, argv, optind + 1, verbose);
+
+        interp_run(s_raw, max_steps);
+        interp_run(s_opt, max_steps);
+
+        // If one level finished and the other ran out of steps, the register
+        // values aren't comparable -- the slower one was cut off mid-run.
+        // (-O typically needs far fewer steps, so the raw run caps out first.)
+        if (s_raw->halted != s_opt->halted) {
+            fprintf(stderr, "INCONCLUSIVE: -O0 %s but -O %s at step cap %" PRIu64
+                            "; raise -s to compare results\n",
+                    s_raw->halted ? "halted" : "hit the step limit",
+                    s_opt->halted ? "halted" : "hit the step limit", max_steps);
+            interp_cleanup(s_raw);
+            interp_cleanup(s_opt);
+            arena_free(arena);
+            return 2;
+        }
+
+        int mismatches = 0;
+        // Both states come from the same IrProgram, so register i means the
+        // same name in each.
+        for (uint32_t i = 0; i < prog->reg_count; i++) {
+            if (bignum_eq(s_raw->regs[i], s_opt->regs[i])) continue;
+            char *a = bignum_to_string(s_raw->regs[i]);
+            char *b = bignum_to_string(s_opt->regs[i]);
+            fprintf(stderr, "MISMATCH: %s = %s at -O0 but %s at -O\n",
+                    prog->reg_names[i]->data, a, b);
+            free(a); free(b);
+            mismatches++;
+        }
+
+        if (mismatches == 0) {
+            printf("OK: %u registers agree between -O0 and -O "
+                   "(%" PRIu64 " steps vs %" PRIu64 ")\n",
+                   prog->reg_count, s_raw->steps, s_opt->steps);
+        }
+        bool ok = (mismatches == 0) && s_raw->halted;
+        if (!s_raw->halted && mismatches == 0) {
+            fprintf(stderr, "Warning: step limit reached at both levels; "
+                            "results compared at the cap, not at halt\n");
+        }
+        interp_cleanup(s_raw);
+        interp_cleanup(s_opt);
+        arena_free(arena);
+        return ok ? 0 : 1;
+    }
+
     // Create interpreter state
     InterpState *state = interp_new(arena, opt_prog);
     interp_init_regs(state);
 
     // Process register assignments from command line
-    for (int i = optind + 1; i < argc; i++) {
-        char *arg = argv[i];
-        char *eq = strchr(arg, '=');
-        if (!eq) {
-            fprintf(stderr, "Warning: invalid argument '%s' (expected REG=VALUE)\n", arg);
-            continue;
-        }
-
-        *eq = '\0';
-        const char *reg_name = arg;
-        const char *value_str = eq + 1;
-
-        // Parse value as an arbitrary-precision non-negative integer (so the
-        // huge Gödel numbers from --emit-urm work, not just 64-bit ones).
-        Bignum value = bignum_from_string(value_str);
-        if (!interp_set_reg_bignum(state, reg_name, value)) {
-            fprintf(stderr, "Warning: unknown register '%s'\n", reg_name);
-        } else if (verbose) {
-            char *vs = bignum_to_string(value);
-            printf("Set %s = %s\n", reg_name, vs);
-            free(vs);
-        }
-        bignum_free(&value);
-    }
+    apply_assignments(state, NULL, argc, argv, optind + 1, verbose);
 
     // Wire up devices (if the program references any magic register). A program
     // that does I/O is typically an interactive loop, so drop the step cap
@@ -360,7 +443,7 @@ int main(int argc, char *argv[]) {
 
     // Run
     if (verbose) {
-        printf("Running (max %lu steps)...\n", max_steps);
+        printf("Running (max %" PRIu64 " steps)...\n", max_steps);
     }
 
     interp_run(state, max_steps);
@@ -378,7 +461,7 @@ int main(int argc, char *argv[]) {
         interp_print_regs(state);
 
         if (!state->halted) {
-            fprintf(stderr, "\nWarning: execution limit reached (%lu steps)\n",
+            fprintf(stderr, "\nWarning: execution limit reached (%" PRIu64 " steps)\n",
                     state->steps);
         }
     }

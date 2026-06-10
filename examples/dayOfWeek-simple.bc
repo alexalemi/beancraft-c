@@ -32,10 +32,10 @@ leap: use "copy" From=4 To=four
                 deb four leapRestore
                 inc sum leapLoop
       leapRestore: inc four leapLoop
-      leapDone: continue
+      leapDone: deb nil continue continue
 
 # For now, skip the complex 100/400 year corrections and go to lookup
-continue: lookupStart
+continue: deb nil lookupStart lookupStart
 
 lookupStart: deb Month halt
 deb Month day
