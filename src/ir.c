@@ -1,5 +1,6 @@
 #include "beancraft/ir.h"
 #include "beancraft/devices.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -167,6 +168,11 @@ static BcResult resolve_jump(Arena *arena, const Jump *jump, uint32_t current_ad
     case JUMP_OFFSET: {
         int32_t target = (int32_t)current_addr + jump->offset;
         if (target < 0) target = 0;
+        // A past-the-end offset means halt. Clamp to the implicit trailing END
+        // so every backend agrees: the interpreter treated pc >= inst_count as
+        // a silent halt, but the QBE backend emitted jumps to nonexistent
+        // blocks and the optimizer had to bounds-check on its own.
+        if ((uint32_t)target >= inst_count) target = (int32_t)inst_count - 1;
         return BC_OK((void *)(uintptr_t)target);
     }
     }
@@ -182,6 +188,10 @@ BcResult ir_from_ast(Arena *arena, StrPool *strings, const Ast *ast) {
     for (uint32_t i = 0; i < ast->node_count; i++) {
         const AstNode *node = &ast->nodes[i];
         if (node->label) {
+            if (label_table_find(labels, node->label) >= 0) {
+                return bc_err(arena, BC_ERR_SEMANTIC, NULL, node->line, 0,
+                              "duplicate label '%s'", node->label->data);
+            }
             label_table_add(labels, node->label, i);
         }
     }
@@ -282,7 +292,7 @@ void ir_print(const IrProgram *prog) {
 
     printf("Registers:\n");
     for (uint32_t i = 0; i < prog->reg_count; i++) {
-        printf("  [%u] %s = %lu\n", i, prog->reg_names[i]->data, prog->reg_init[i]);
+        printf("  [%u] %s = %" PRIu64 "\n", i, prog->reg_names[i]->data, prog->reg_init[i]);
     }
     printf("\n");
 
