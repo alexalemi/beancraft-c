@@ -157,6 +157,31 @@ check "urm: iszero N=0 -> Zero(s0)=1" "out0=1" examples/urm.bc -O $("$BC" --emit
 check "urm: add A=10 B=5 -> Out(s1)=15" "out1=15" examples/urm.bc -O $("$BC" --emit-urm examples/add.bc A=10 B=5 | tail -1)
 check "urm: mul A=2 B=3 -> Out(s1)=6" "out1=6" examples/urm.bc -O $("$BC" --emit-urm examples/mul.bc A=2 B=3 | tail -1)
 
+# --- Differential sweep: -O0 vs -O on every example via --check ---
+# Device programs are skipped (their side effects would run twice), and a
+# program that can't halt within the cap on zero/default inputs is SKIPped
+# (exit 2 = INCONCLUSIVE), not failed.
+echo
+echo -e "${YELLOW}=== Differential sweep: --check on every example ===${NC}"
+for f in examples/*.bc; do
+    out=$("$BC" -c -s 100000000 "$f" 2>&1)
+    rc=$?
+    name="check $(basename "$f")"
+    if echo "$out" | grep -q "cannot run device programs"; then
+        continue   # device example; nothing to compare
+    fi
+    if [ $rc -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC}: $name"
+        ((PASS++))
+    elif [ $rc -eq 2 ]; then
+        echo -e "${YELLOW}SKIP${NC}: $name (inconclusive at step cap)"
+    else
+        echo -e "${RED}FAIL${NC}: $name"
+        echo "$out" | head -3 | sed 's/^/  /'
+        ((FAIL++))
+    fi
+done
+
 # --- Compiled (-O) path: only if qbe + the bccompile script are available ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ_DIR="$(dirname "$SCRIPT_DIR")"

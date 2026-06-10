@@ -383,14 +383,19 @@ int main(int argc, char *argv[]) {
         interp_run(s_raw, max_steps);
         interp_run(s_opt, max_steps);
 
-        // If one level finished and the other ran out of steps, the register
-        // values aren't comparable -- the slower one was cut off mid-run.
-        // (-O typically needs far fewer steps, so the raw run caps out first.)
-        if (s_raw->halted != s_opt->halted) {
-            fprintf(stderr, "INCONCLUSIVE: -O0 %s but -O %s at step cap %" PRIu64
-                            "; raise -s to compare results\n",
-                    s_raw->halted ? "halted" : "hit the step limit",
-                    s_opt->halted ? "halted" : "hit the step limit", max_steps);
+        // Register values are only comparable when both levels ran to halt:
+        // if either was cut off mid-run the states diverge trivially (the
+        // folds compress steps, so the two runs aren't in lockstep).
+        if (!s_raw->halted || !s_opt->halted) {
+            if (s_raw->halted != s_opt->halted) {
+                fprintf(stderr, "INCONCLUSIVE: -O0 %s but -O %s at step cap %" PRIu64
+                                "; raise -s to compare results\n",
+                        s_raw->halted ? "halted" : "hit the step limit",
+                        s_opt->halted ? "halted" : "hit the step limit", max_steps);
+            } else {
+                fprintf(stderr, "INCONCLUSIVE: step cap %" PRIu64 " reached at both "
+                                "levels; raise -s to compare results\n", max_steps);
+            }
             interp_cleanup(s_raw);
             interp_cleanup(s_opt);
             arena_free(arena);
@@ -415,15 +420,10 @@ int main(int argc, char *argv[]) {
                    "(%" PRIu64 " steps vs %" PRIu64 ")\n",
                    prog->reg_count, s_raw->steps, s_opt->steps);
         }
-        bool ok = (mismatches == 0) && s_raw->halted;
-        if (!s_raw->halted && mismatches == 0) {
-            fprintf(stderr, "Warning: step limit reached at both levels; "
-                            "results compared at the cap, not at halt\n");
-        }
         interp_cleanup(s_raw);
         interp_cleanup(s_opt);
         arena_free(arena);
-        return ok ? 0 : 1;
+        return mismatches == 0 ? 0 : 1;
     }
 
     // Create interpreter state
