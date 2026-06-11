@@ -15,8 +15,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Lower ASLR entropy for the sanitizers
         run: sudo sysctl vm.mmap_rnd_bits=28
-      - name: Install qbe (compiled-path tests; the suite skips them if absent)
-        run: sudo apt-get update && sudo apt-get install -y qbe || true
+      - name: Build qbe (not packaged for noble; the suite skips its tests if this fails)
+        run: |
+          curl -fsSL https://c9x.me/compile/release/qbe-1.2.tar.xz | tar xJ \
+            && make -C qbe-1.2 -j2 \
+            && sudo make -C qbe-1.2 install \
+            || echo "qbe unavailable; compiled-path tests will be skipped"
       - name: make test
         run: make test
 
