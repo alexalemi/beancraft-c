@@ -52,6 +52,9 @@ Each configuration compiles into its own subdirectory of `build/`
 
 ### Web playground
 
+**Try it live: <https://alexalemi.github.io/beancraft-c/>** (built and deployed
+from `main` by `.github/workflows/pages.yml`).
+
 `make wasm` (with [Emscripten](https://emscripten.org/) on `PATH`) compiles the
 interpreter — parser → IR → optimizer → interpreter, no QBE backend — to a
 WebAssembly module (built with Asyncify). `web/index.html` is a small demo page
