@@ -1,0 +1,32 @@
+# Unit tests (ASan/UBSan) + the full example suite (interpreted, -O, --check
+# differential sweep, QBE-compiled), plus a short differential fuzz smoke.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lower ASLR entropy for the sanitizers
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Install qbe (compiled-path tests; the suite skips them if absent)
+        run: sudo apt-get update && sudo apt-get install -y qbe || true
+      - name: make test
+        run: make test
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lower ASLR entropy for the sanitizers
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Build the differential fuzzer
+        run: make fuzz
+      - name: Fuzz for 60 seconds
+        run: build/fuzz_pipeline build/fuzz-corpus -max_len=4096 -rss_limit_mb=4096 -max_total_time=60 -print_final_stats=1

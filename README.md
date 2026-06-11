@@ -1,5 +1,8 @@
 # beancraft
 
+[![ci](https://github.com/alexalemi/beancraft-c/actions/workflows/ci.yml/badge.svg)](https://github.com/alexalemi/beancraft-c/actions/workflows/ci.yml)
+[![playground](https://github.com/alexalemi/beancraft-c/actions/workflows/pages.yml/badge.svg)](https://www.alexalemi.com/beancraft-c/)
+
 **beancraft** is a tiny programming language whose only data type is the
 non-negative integer and whose only operations are *increment* and
 *decrement-or-branch* — a [counter machine](https://en.wikipedia.org/wiki/Counter_machine)
