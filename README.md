@@ -52,7 +52,7 @@ Each configuration compiles into its own subdirectory of `build/`
 
 ### Web playground
 
-**Try it live: <https://alexalemi.github.io/beancraft-c/>** (built and deployed
+**Try it live: <https://www.alexalemi.com/beancraft-c/>** (built and deployed
 from `main` by `.github/workflows/pages.yml`).
 
 `make wasm` (with [Emscripten](https://emscripten.org/) on `PATH`) compiles the
