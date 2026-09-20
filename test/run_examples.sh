@@ -157,6 +157,50 @@ check "urm: iszero N=0 -> Zero(s0)=1" "out0=1" examples/urm.bc -O $("$BC" --emit
 check "urm: add A=10 B=5 -> Out(s1)=15" "out1=15" examples/urm.bc -O $("$BC" --emit-urm examples/add.bc A=10 B=5 | tail -1)
 check "urm: mul A=2 B=3 -> Out(s1)=6" "out1=6" examples/urm.bc -O $("$BC" --emit-urm examples/mul.bc A=2 B=3 | tail -1)
 
+# --- tally.bc: the 62-move universal machine (tally programs, prime registers) ---
+# out_k = the exponent of the k-th prime in R; --emit-tally prints the map.
+echo
+echo -e "${YELLOW}=== tally.bc (tally-encoded universal machine; out_k = exponent of prime k) ===${NC}"
+check "tally: iseven N=4 -> Even(2)=1"   "out0=1"  examples/tally.bc -O $("$BC" --emit-tally examples/iseven.bc N=4 | tail -1)
+check "tally: iseven N=7 -> Even(2)=0"   "out0=0"  examples/tally.bc -O $("$BC" --emit-tally examples/iseven.bc N=7 | tail -1)
+check "tally: iszero N=0 -> Zero(2)=1"   "out0=1"  examples/tally.bc -O $("$BC" --emit-tally examples/iszero.bc N=0 | tail -1)
+check "tally: add A=10 B=5 -> Out(3)=15" "out1=15" examples/tally.bc -O $("$BC" --emit-tally examples/add.bc A=10 B=5 | tail -1)
+check "tally: mul A=2 B=3 -> Out(3)=6"   "out1=6"  examples/tally.bc -O $("$BC" --emit-tally examples/mul.bc A=2 B=3 | tail -1)
+check "tally: mul A=7 B=8 -> Out(3)=56"  "out1=56" examples/tally.bc -O $("$BC" --emit-tally examples/mul.bc A=7 B=8 | tail -1)
+check "tally: fib N=10 -> Out(11): R=11^89" "R=1890591424712781041871514584574319778449301246603238034051" examples/tally.bc -O $("$BC" --emit-tally examples/fib.bc N=10 | tail -1)
+# The machine proper is IR instructions 0..60 plus the stop they jump to: 62.
+if "$BC" --show-ir -n examples/tally.bc | grep -q '^ *61: unpack'; then
+    echo -e "${GREEN}PASS${NC}: tally.bc's machine is 62 moves (unpack starts at instruction 61)"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC}: tally.bc's machine is no longer 62 moves"
+    ((FAIL++))
+fi
+
+# --- --emit-dot: a Graphviz graph of the program (rendered if dot is installed) ---
+echo
+echo -e "${YELLOW}=== --emit-dot ===${NC}"
+if "$BC" --emit-dot examples/mul.bc | grep -q '^digraph' \
+   && [ "$("$BC" --emit-dot examples/mul.bc | grep -c 'shape=circle')" = 3 ] \
+   && [ "$("$BC" --emit-dot examples/mul.bc | grep -c 'shape=diamond')" = 5 ] \
+   && [ "$("$BC" --emit-dot examples/mul.bc | grep -c 'arrowtail=odot')" = 5 ] \
+   && ! "$BC" --emit-dot examples/iseven.bc | grep -q ':nil'; then
+    echo -e "${GREEN}PASS${NC}: emit-dot mul.bc (3 circles, 5 diamonds, 5 open-circle zero branches; no :nil nodes)"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC}: emit-dot mul.bc"
+    ((FAIL++))
+fi
+if command -v dot >/dev/null 2>&1; then
+    if "$BC" --emit-dot examples/tally.bc | dot -Tsvg >/dev/null 2>&1; then
+        echo -e "${GREEN}PASS${NC}: dot renders --emit-dot tally.bc"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC}: dot rejects --emit-dot tally.bc"
+        ((FAIL++))
+    fi
+fi
+
 # --- Differential sweep: -O0 vs -O on every example via --check ---
 # Device programs are skipped (their side effects would run twice), and a
 # program that can't halt within the cap on zero/default inputs is SKIPped

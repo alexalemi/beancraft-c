@@ -11,10 +11,10 @@ structures at each stage, and where to plug in a new optimization or device.
  source text
    │  src/lexer.c  +  src/parser.c
    ▼
- AST  (src/ast.h)                       inc / deb / end / use / funcdef / call nodes
+ AST  (src/ast.h)                       give / take / stop / use / funcdef / call nodes
    │  src/loader.c   — loader_expand()
    ▼
- AST  (flattened)                       only inc / deb / end remain; use & func gone
+ AST  (flattened)                       only give / take / stop remain; use & func gone
    │  src/ir.c       — ir_from_ast()
    ▼
  IrProgram  (src/ir.h)                  a counter machine: IrInst[] {op, reg, arg_a, arg_b}
@@ -36,13 +36,17 @@ Everything in the front end is allocated from a single bump **`Arena`**
 
 `src/main.c` is the CLI: parse args, run the pipeline, optionally dump
 `--show-ast` / `--show-ir` / `--show-opt`, then either interpret or `--emit-qbe`.
+The other emitters work off the `IrProgram`: `--emit-urm` / `--emit-tally`
+encode it for the two universal machines, and `--emit-dot` (`src/dot.c`) prints
+it as a Graphviz graph — bare-label no-ops are threaded away so the picture
+shows only real `give`/`take`/`stop` nodes.
 
 ## Stage 1 — lexer + parser → AST
 
 `src/lexer.c` is a hand-written scanner. Notable rules: `#` to end-of-line is a
-comment; `inc`/`deb`/`end`/`use` have the aliases `+`/`-`/`.`/`%`; a `+` or `-`
+comment; `give`/`take`/`stop`/`use` have the aliases `+`/`-`/`.`/`%`; a `+` or `-`
 *immediately* before a digit is a signed number (a relative jump offset),
-otherwise it's the `inc`/`deb` token; identifier characters include `-` and `/`
+otherwise it's the `give`/`take` token; identifier characters include `-` and `/`
 so device names like `con/byte` and scoped names like `copy-0/tmp` lex as one
 token. Newlines are real tokens (statements are line-oriented).
 
@@ -51,7 +55,7 @@ array of `AstNode`s, one per source statement, each optionally carrying a
 `label`. Node kinds: `AST_INC`, `AST_DEB`, `AST_END`, `AST_USE`, `AST_FUNCDEF`,
 `AST_CALL`. Jump targets are kept symbolic at this stage (`JUMP_LABEL` /
 `JUMP_KEYWORD` / `JUMP_OFFSET` / `JUMP_NONE`). Two small desugarings happen here:
-a `label:` alone on a line becomes a fall-through no-op (`deb :nil next next`),
+a `label:` alone on a line becomes a fall-through no-op (`take :nil next next`),
 and a `label:` at end of file/`func`-body becomes an `AST_END` (so you can name
 your exit point).
 
@@ -73,7 +77,7 @@ no `use`, `func`, or call nodes:
   mappings redirect a label. The inlined copy is bracketed by two labelled
   no-ops — an *entry* point (target of `init` inside the body, and of any label
   on the `use` statement) and a *return* point (target of `done`/`halt` and the
-  body's own `end`).
+  body's own `stop`).
 - **`name arg ...` calls** bind each argument to a parameter (a register param
   gets a register-alias or a literal-value mapping; a `~`-param gets a label),
   then inline the `func` body exactly like a `use`.
@@ -105,8 +109,8 @@ This `IrProgram` is the actual counter machine. `--show-ir` prints it.
 ## Stage 4 — the optimizer: `ir_optimize`
 
 `src/opt.c` produces an `IrOptProgram` (`include/beancraft/opt.h`). The extended
-instruction set adds, on top of `INC`/`DEB`/`END`, five O(1) folds: `ZERO`,
-`TRANSFER`, `DIVMOD`, `MULADD`, `ISZERO`. An `IrOptInst` carries `reg`, `arg_a`,
+instruction set adds, on top of `INC`/`DEB`/`END`, seven O(1) folds: `ZERO`,
+`TRANSFER`, `DIVMOD`, `MULADD`, `ISZERO`, `COPY`, `DIVBIN`. An `IrOptInst` carries `reg`, `arg_a`,
 `arg_b`, and `dest_off`/`dest_count` indexing a packed `dests[]` pool that holds
 TRANSFER's destination registers / DIVMOD's quotient registers + per-remainder
 exit indices / MULADD's `[S, T, D₁…Dₘ]`.
@@ -118,12 +122,15 @@ and `--show-opt` look the same without `-O`.)
 At **`OPT_LOOPS`** (`-O` / `--show-opt`), five passes:
 
 1. **Detect.** For each not-yet-consumed instruction `i`, `ir_detect_pattern`
-   tries, in order, `detect_muladd_pattern` → `detect_transfer_pattern` →
-   `detect_divmod_pattern` → `detect_iszero_pattern` → `detect_zero_pattern`. A
+   tries, in order, `detect_divbin_pattern` → `detect_muladd_pattern` →
+   `detect_transfer_pattern` (upgraded to COPY when a second transfer moves the
+   temp straight back) → `detect_divmod_pattern` → `detect_iszero_pattern` →
+   `detect_zero_pattern`. DIVBIN goes first because it begins with a
+   ZERO-shaped instruction that the plain ZERO fold would otherwise claim. A
    match that doesn't touch a device register (those have side effects on
-   `inc`/`deb`, so their loops are left alone) is recorded and the instructions
+   `give`/`take`, so their loops are left alone) is recorded and the instructions
    it covers, `[start, end)`, are marked consumed. Helpers: `is_deb`/`is_inc`
-   (op check), `collect_inc_run` (a contiguous `inc`-chain looping back to a
+   (op check), `collect_inc_run` (a contiguous `give`-chain looping back to a
    given instruction), and `body_is_private` (no jump from *outside* the matched
    range lands in its interior, and no exit target points strictly inside it —
    both would dangle once folded).
@@ -133,11 +140,11 @@ At **`OPT_LOOPS`** (`-O` / `--show-opt`), five passes:
 3. **Remap.** Rewrite jump targets through `inst_map`. DIVMOD's per-remainder
    exit indices live in the `dests[]` pool and are remapped there; TRANSFER/MULADD
    dests are *register* indices and are left alone.
-4. **Thread.** `deb R X X` goes to `X` whatever `R` holds — a pure no-op jump
-   (bare `label:` lines lower to `deb :nil next next`, and `use`/`func` inlining
+4. **Thread.** `take R X X` goes to `X` whatever `R` holds — a pure no-op jump
+   (bare `label:` lines lower to `take :nil next next`, and `use`/`func` inlining
    brackets each body with two more). Rewrite every jump target to skip past
-   chains of those. (Devices are excluded — a `deb` of a device-poll register has
-   a side effect; and `deb z A B` with `z` "never incremented" is *not* treated
+   chains of those. (Devices are excluded — a `take` of a device-poll register has
+   a side effect; and `take z A B` with `z` "never incremented" is *not* treated
    as a no-op, since any named register can be set from the command line.)
 5. **DCE.** After threading the no-ops have no predecessors except themselves;
    compute reachability from instruction 0, drop everything unreachable, and
@@ -148,16 +155,18 @@ At **`OPT_LOOPS`** (`-O` / `--show-opt`), five passes:
 
 | pattern | shape (raw IR) | folds to |
 | --- | --- | --- |
-| **ZERO** | `deb R exit self` | `R := 0; goto exit` |
-| **TRANSFER** | `deb A exit; inc D₁; …; inc Dₙ; jmp deb` | `Dᵢ += A; A := 0; goto exit` |
-| **DIVMOD** | `deb R e₀; deb R e₁; …; deb R e_{k-1}; inc Q₁; …; inc Qₘ; jmp deb`  (k ≥ 2, m ≥ 0) | `Qᵢ += ⌊R/k⌋;  goto e_{R mod k};  R := 0` |
-| **MULADD** | `deb C exit; [deb T self;] deb S tx; inc D₁…Dₘ; inc T (→deb S); deb T (→deb C); inc S (→deb T)` | `if C≠0: Dᵢ += C·S + (C−1)·T;  S += T;  T := 0;  C := 0;  goto exit` |
-| **ISZERO** | `deb R z; inc R nz`  (the deb's non-zero branch falls into the inc, which undoes the decrement) | `goto (R == 0 ? z : nz)`  — R unchanged |
+| **ZERO** | `take R exit self` | `R := 0; goto exit` |
+| **TRANSFER** | `take A exit; give D₁; …; give Dₙ; jmp take` | `Dᵢ += A; A := 0; goto exit` |
+| **DIVMOD** | `take R e₀; take R e₁; …; take R e_{k-1}; give Q₁; …; give Qₘ; jmp take`  (k ≥ 2, m ≥ 0) | `Qᵢ += ⌊R/k⌋;  goto e_{R mod k};  R := 0` |
+| **MULADD** | `take C exit; [take T self;] take S tx; give D₁…Dₘ; give T (→take S); take T (→take C); give S (→take T)` | `if C≠0: Dᵢ += C·S + (C−1)·T;  S += T;  T := 0;  C := 0;  goto exit` |
+| **ISZERO** | `take R z; give R nz`  (the take's non-zero branch falls into the give, which undoes the decrement) | `goto (R == 0 ? z : nz)`  — R unchanged |
+| **COPY** | `TRANSFER S→{D…,T}` immediately followed by `TRANSFER T→{S}` | `Dᵢ += S;  S += T;  T := 0` |
+| **DIVBIN** | `take REM next self;  L: take P full; take R exit; give REM; [give Xᵢ;] jmp L;  full: take REM q; give P; jmp full;  q: give Q; jmp L` | `Q += R div P;  REM := R mod P;  Xᵢ += R;  P := P − REM − 1;  R := 0;  goto exit`  (P == 0: never terminates, so the fold spins) |
 
 MULADD is the multiply idiom — `for C { [T:=0;] TRANSFER S→{D…,T}; TRANSFER T→{S} }`
 — so `Out = A*B` stops being O(A·B). Constraints: the loop body is one contiguous
 block, `{C, S, T, D₁…Dₘ}` are pairwise distinct, fan-out ≤ `IR_OPT_MAX_DESTS`
-(32), `body_is_private` holds, and the optional leading `deb T self` (a per-round
+(32), `body_is_private` holds, and the optional leading `take T self` (a per-round
 `T := 0`) sets the "preclear" flag — then `T` is provably 0 and the `(C−1)·T` /
 `S += T` terms drop. The `(C−1)·T` term exists because `TRANSFER T→{S}` copies
 `T+S` back into `S` each round; if `T` is junk at loop entry it gets folded in
@@ -165,6 +174,20 @@ block, `{C, S, T, D₁…Dₘ}` are pairwise distinct, fan-out ≤ `IR_OPT_MAX_D
 
 If any constraint fails the fold simply doesn't fire and the inner loops still
 fold to TRANSFERs on their own — every pattern degrades gracefully.
+
+DIVBIN is the "divide by a bin" idiom `examples/tally.bc` uses to test whether
+the prime it just read divides the register bank: take a bean from `P` and one
+from `R` together, counting the pairs in `REM`; when `P` runs dry a whole `P`
+came out of `R`, so pour `REM` back (refilling `P` and re-zeroing `REM`) and
+count one in `Q`; when `R` runs dry first, `REM` is `R mod P`. The leading
+`REM := 0` is required (a stale `REM` would be poured into `P` on the first
+refill), the extra accumulators `Xᵢ` in the lockstep run receive every bean
+taken from `R`, and `P`'s odd final value is exactly what the loop leaves: the
+`take P` that found `R` empty had already taken one bean. The divisor is a
+register, so the fold needs `bignum_divmod` (an arbitrary-precision divisor:
+limb-wise for divisors that fit a word, shift-subtract otherwise) and
+`bignum_sub`; both live in `src/bignum.c`, and `$bc_divbin` in the QBE runtime
+returns a flag the generated block branches on to reproduce the `P == 0` spin.
 
 ## Stage 5a — the interpreter
 
@@ -222,12 +245,12 @@ for the register reference.
 a tag in the low bit:
 
 - **LSB = 1** → an *immediate*: the value is `x >> 1` (so up to ~4.6×10¹⁸ fits
-  inline, no allocation — `inc`/`dec` are branch-free header functions). Zero is
+  inline, no allocation — `give`/`dec` are branch-free header functions). Zero is
   the word `1` (`0 << 1 | 1`), **not** `0` — worth remembering when reading the
   QBE code.
 - **LSB = 0** → a pointer to a heap `BigLimbs { uint32_t len, cap; uint64_t limbs[] }`,
   a base-2⁶⁴ little-endian magnitude. Operations promote to heap on overflow and
-  demote back when a result fits; `inc`, `dec`, `add`, `add_into`, `mul`,
+  demote back when a result fits; `give`, `dec`, `add`, `add_into`, `mul`,
   `divmod_small`, compare, and decimal `to_string`/`from_string` are all
   provided. There's no subtraction below zero (`dec` of `0` is a no-op) and no
   signedness — beancraft naturals only.
@@ -236,15 +259,17 @@ a tag in the low bit:
 
 - `make test` builds everything with `-fsanitize=address,undefined` and runs:
   - `test/test_parser.c` — lexer/parser/AST cases;
-  - `test/test_bignum.c` — `inc`/`dec`/`add`/`mul`/compare/string round-trips,
+  - `test/test_bignum.c` — `give`/`dec`/`add`/`mul`/compare/string round-trips,
     including overflow-to-heap and big-number cases;
   - `test/test_opt.c` — the optimizer: pattern detection (incl. the MULADD
-    preclear variant), graceful degradation on near-misses, and — the gold
+    preclear variant and DIVBIN), graceful degradation on near-misses, and — the gold
     standard for an optimizer — *the `OPT_NONE` result equals the `OPT_LOOPS`
     result for the same inputs* (plus closed-form spot checks);
   - then `test/run_examples.sh` (also runnable standalone as
     `bash test/run_examples.sh ./beancraft`): ~50 example-program checks at
-    `-O0` and `-O`, plus a block that — if `qbe` and `scripts/bccompile` are
+    `-O0` and `-O`, the two universal machines running `--emit-urm`/`--emit-tally`
+    encodings of small programs, an `--emit-dot` shape check (rendered with
+    `dot` when installed), plus a block that — if `qbe` and `scripts/bccompile` are
     available — compiles a few programs and runs the binaries.
 
 ## Adding things

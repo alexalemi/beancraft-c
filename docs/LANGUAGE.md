@@ -3,9 +3,10 @@
 beancraft is a [counter machine](https://en.wikipedia.org/wiki/Counter_machine):
 a finite list of instructions, a set of registers each holding a non-negative
 integer (arbitrary precision — they're bignums), and a program counter. There
-are exactly two real instructions — *increment* and *decrement-or-branch* — plus
-a *halt*. Everything else (loops, conditionals, copy, add, multiply, …) is built
-out of those, which is the whole point.
+are exactly two real instructions — **`give`** (increment: put a bean in a bin)
+and **`take`** (decrement-or-branch: take a bean out, or, if the bin is empty,
+go somewhere else) — plus **`stop`**. Everything else (loops, conditionals, copy,
+add, multiply, …) is built out of those, which is the whole point.
 
 On top of that core the language adds three conveniences that disappear before
 execution: **labels** (symbolic jump targets), **`use`** (textual module
@@ -24,10 +25,12 @@ None of them add expressive power; they make programs writable.
   scoped names like `copy-0/tmp`.
 - **Numbers** are decimal, optionally signed (`5`, `+1`, `-2`). A `+` or `-`
   *immediately followed by a digit* is a number; otherwise `+` and `-` are the
-  `inc` / `deb` instructions.
+  `give` / `take` instructions.
 - **Strings** are `"…"` (used only as `use` filenames; no escapes, no newlines).
-- Instruction words have one-character aliases: `inc` = `+`, `deb` = `-`,
-  `end` = `.`, `use` = `%`. `func` has no alias.
+- Instruction words have one-character aliases: `give` = `+`, `take` = `-`,
+  `stop` = `.`, `use` = `%`. `func` has no alias. The older counter-machine
+  spellings `inc` / `deb` / `end` are still accepted as aliases of
+  `give` / `take` / `stop`.
 - **Reserved jump words**: `self`, `next`, `prev`, `init`, `done`, `halt`. (They
   are only special as jump targets; you can still use them as register names.)
 
@@ -69,7 +72,7 @@ control falls off the end — there is always an implicit `halt` appended). Ther
 is no notion of "calling" or "returning" at the instruction level; there is only
 *goto*.
 
-### `inc R [target]` — increment
+### `give R [target]` — increment
 
 Add 1 to register `R`, then jump to `target`. `target` defaults to the next
 instruction.
@@ -77,10 +80,10 @@ instruction.
 ```bc
 + counter        # counter++; fall through
 + counter loop   # counter++; goto loop
-inc Out          # 'inc' spelled out
+give Out          # 'give' spelled out
 ```
 
-### `deb R target_zero [target_nonzero]` — decrement-or-branch
+### `take R target_zero [target_nonzero]` — decrement-or-branch
 
 If `R` is `0`: jump to `target_zero` (R is left at 0).
 If `R` is `> 0`: subtract 1 from `R`, then jump to `target_nonzero`.
@@ -95,7 +98,7 @@ and only subtraction:
 - A neg pos      # branch on whether A was zero (consuming one from A if not)
 ```
 
-### `end` (or `.`) — halt
+### `stop` (or `.`) — halt
 
 Stop the machine. A bare `label:` at the very end of a file (or `func` body)
 also acts as a halt, which lets you give your exit point a name:
@@ -117,7 +120,7 @@ Anywhere an instruction takes a `target`:
 
 | target | goes to |
 | --- | --- |
-| *(omitted)* | the next instruction (`inc` always; `deb`'s second target) |
+| *(omitted)* | the next instruction (`give` always; `take`'s second target) |
 | `name` | the instruction labelled `name:` |
 | `self` | this instruction (re-execute it — the standard "loop until zero" idiom) |
 | `next` | the next instruction (explicit form of omitting) |
@@ -195,7 +198,7 @@ Device registers (`con/byte`, `screen/x`, …) are global — they are never sco
 and never need a mapping.
 
 `init` inside a module body jumps to that inclusion's *entry* point, not the
-program's instruction 0; `done`/`halt` (and the module's own `end`) jump to its
+program's instruction 0; `done`/`halt` (and the module's own `stop`) jump to its
 *return* point — the instruction right after the inlined copy. A `use` statement
 may itself carry a label, which is placed on the entry point, so external code
 can jump in. `examples/mul_with_use.bc` multiplies by copying `A` into `Out` `B`
@@ -238,16 +241,16 @@ func addn N R {        # R += N   (N is a value argument, consumed)
 }
 
 addn 72 con/byte       # con/byte += 72   ('H')
-inc con/emit           # print it
+give con/emit           # print it
 addn 105 con/byte      # con/byte += 105  ('i')
-inc con/emit
+give con/emit
 ```
 
 A `use`d module that contains `func` definitions registers them so the importer
 (and anything *it* pulls in) can call them — `use "std"` brings in `clear`,
 `copy`, `addr`, `addn`, `subn`, `half`, `iseq`, `inrange`, `note`, … without
 generating any code of its own. Functions can `use` other modules and call other
-functions; the loader keeps expanding until nothing is left but `inc`/`deb`/`end`.
+functions; the loader keeps expanding until nothing is left but `give`/`take`/`stop`.
 
 See `examples/std.bc` for the standard library, and `examples/hello.bc`,
 `examples/dayOfWeek-refactored.bc`, `examples/urm.bc` for `func` in anger.
@@ -273,6 +276,14 @@ $ ./beancraft file.bc [REG=VALUE ...] [options]
 - `--emit-urm` — print the program (and, if you pass `REG=VALUE` args, the
   initial registers) Gödel-encoded for `examples/urm.bc` (the universal machine;
   see below).
+- `--emit-tally` — the same for `examples/tally.bc`, the 62-move universal
+  machine (see [The tally machine](#the-tally-machine)).
+- `--emit-dot` (alias `--show-dot`) — print the lowered program as a
+  [Graphviz](https://graphviz.org/) graph and exit. Each `give` is a circle and
+  each `take` a diamond, both labelled with the register; the diamond's
+  empty-bin branch leaves from its side with a small open circle at the tail,
+  the took-a-bean branch continues downward; `stop` is a stop sign; source
+  labels appear beside their node. `./beancraft --emit-dot mul.bc | dot -Tsvg > mul.svg`.
 
 ## The universal register machine
 
@@ -282,7 +293,7 @@ instruction set and any number of registers `s0, s1, …`:
 
 | `t` | meaning |
 | --- | --- |
-| `0` | `inc s_r; PC := g1` |
+| `0` | `give s_r; PC := g1` |
 | `1` | `if s_r == 0 then PC := g1 else (s_r--; PC := g2)` |
 | `2` | halt |
 
@@ -299,10 +310,10 @@ integers, Gödel-encoded with the pairing code:
 So there's no fixed register count or instruction count: register `r` is "the
 `r`-th element of the register integer," and `urm.bc` accesses it by walking the
 list (pop `r` elements onto a scratch stack, touch element `r`, push them back).
-Building and walking those numbers is all `inc`/`deb` loops — so `urm.bc` is
+Building and walking those numbers is all `give`/`take` loops — so `urm.bc` is
 exponential-time without `-O` (a single list pop is exponential in the encoded
 number's bit length) and merely *very slow* with it (every list op folds to an
-O(1) bignum op, but each simulated `inc`/`deb` still walks the register list).
+O(1) bignum op, but each simulated `give`/`take` still walks the register list).
 
 `beancraft --emit-urm file.bc [REG=VALUE...]` prints the encoding — `P=…` (the
 program) and, if you pass register values, `R=…` (the initial registers).
@@ -326,3 +337,52 @@ out2 = 0     # B
 out3 = 2     # A
 ...
 ```
+
+## The tally machine
+
+`examples/tally.bc` is a second universal machine, built for reading rather than
+for speed: **62 moves** (61 instructions plus the `stop` they jump to) that run
+any beancraft program. Its two inputs are single numbers:
+
+- **`P`, the program, as tallies.** A field holding `n` is `n` one-bits followed
+  by a zero; fields are laid end to end, least-significant bit first, so the
+  machine reads them by halving `P`. An instruction is a run of fields:
+
+  | instruction | fields |
+  | --- | --- |
+  | `give r → a` | `2p`, `a` |
+  | `take r → a / b` | `2p+1`, `a`, `b` |
+  | `stop` | `0` (the empty tally) |
+
+  where `p` is the prime that stands for register `r` (the first register is
+  `2`, the second `3`, then `5`, …) and a jump target is the **field offset** of
+  the instruction it names (the machine's `PC` counts fields). Reading past the
+  end of `P` yields empty tallies forever, i.e. `stop`, so a trailing `stop`
+  costs no bits at all.
+- **`R`, the bank of registers, as one number:** `R = 2^v₀ · 3^v₁ · 5^v₂ · …`.
+  `give r` multiplies `R` by `p`; `take r` asks whether `p` divides `R` — if it
+  does, `R := R / p` (a bean came out), if not, the bin was empty. The empty
+  bank is `R = 1`, so `R` must never start at `0`.
+
+Because each instruction carries its own prime, the machine never has to compute
+primes; it only multiplies by, or divides by, a number it has just read. The
+division — "divide by a bin", a long division of `R` by the *value* of another
+register — is the loop the optimizer folds as `DIVBIN`, so with `-O` a simulated
+`take` is one bignum op and a simulated step costs O(bits of `P` before the
+instruction). Without `-O` a single halving of `P` is exponential in its length.
+
+```console
+$ ./beancraft --emit-tally examples/mul.bc A=2 B=3
+# examples/mul.bc -> tally.bc encoding (223 bits).  registers (prime): tmp=2 Out=3 B=5 A=7 :nil=11
+P=3369967621600483359339352413265736246534097109189619817923405937119 R=6125
+$ ./beancraft examples/tally.bc -O P=3369967621600483359339352413265736246534097109189619817923405937119 R=6125
+...
+R = 49          # 7^2: A survived; Out (3^6) was unpacked below
+out0 = 0        # tmp   (prime 2)
+out1 = 6        # Out   (prime 3)  = 2 * 3
+out2 = 0        # B     (prime 5)
+```
+
+What follows the machine's `unpack:` label in the file is a convenience that
+factors the first three primes back out of `R` into `out0..out2`; it is not
+part of the machine.

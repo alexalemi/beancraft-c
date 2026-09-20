@@ -4,8 +4,9 @@
 [![playground](https://github.com/alexalemi/beancraft-c/actions/workflows/pages.yml/badge.svg)](https://www.alexalemi.com/beancraft-c/)
 
 **beancraft** is a tiny programming language whose only data type is the
-non-negative integer and whose only operations are *increment* and
-*decrement-or-branch* — a [counter machine](https://en.wikipedia.org/wiki/Counter_machine)
+non-negative integer — a *bin* of beans — and whose only operations are
+**`give`** (put a bean in a bin) and **`take`** (take one out, or branch if the
+bin is empty) — a [counter machine](https://en.wikipedia.org/wiki/Counter_machine)
 (a.k.a. a Minsky register machine). It is Turing-complete, painfully so. This
 repository is the C implementation: a parser, an optimizer, a tree-walking
 interpreter, and a [QBE](https://c9x.me/compile/)-based native compiler — plus a
@@ -63,7 +64,7 @@ interpreter — parser → IR → optimizer → interpreter, no QBE backend — 
 WebAssembly module (built with Asyncify). `web/index.html` is a small demo page
 that loads it: pick an example or type your own counter-machine program, set
 register values, hit Run. Programs that draw via `screen/*` animate live on a
-256×192 canvas below the output panes — each `inc screen/flush` paints a frame
+256×192 canvas below the output panes — each `give screen/flush` paints a frame
 and yields to the browser. While a run is live, your keyboard feeds `kbd/event`
 (same key encoding as the SDL backend), pointer events over the canvas feed
 `mouse/*`, and the console-input box feeds `con/read` (which blocks until you
@@ -95,6 +96,8 @@ $ ./beancraft [options] file.bc [REG=VALUE ...]
 | `--show-ast` / `--show-ir` / `--show-opt` | dump the AST / IR / optimized IR, then run (use `-n` to just dump) |
 | `--emit-qbe` | emit QBE IL to stdout, then exit (combine with `-O`) |
 | `--emit-urm` | emit the program (and registers) Gödel-encoded for `examples/urm.bc`, then exit |
+| `--emit-tally` | emit the program (and registers) tally-encoded for `examples/tally.bc`, the 62-move universal machine, then exit |
+| `--emit-dot` (alias `--show-dot`) | emit the program as a [Graphviz](https://graphviz.org/) graph, then exit — pipe into `dot -Tsvg`. `give`s are circles, `take`s are diamonds whose empty-bin branch leaves from the side with a small open circle at its tail |
 
 `REG=VALUE` arguments set a register's initial value before the run (the value
 may be an arbitrary-precision integer — e.g. the huge numbers from `--emit-urm`);
@@ -121,13 +124,15 @@ A counter machine adds by looping and multiplies by looping over *that* — so t
 naïve cost of `Out := A*B` is O(A·B) increments. The optimizer recognizes a
 handful of loop idioms and folds each into one O(1) bignum operation:
 
-- **ZERO** — `deb R exit self` ⟶ `R := 0`
-- **TRANSFER** — `deb A exit; inc D₁…Dₙ; jmp` ⟶ `Dᵢ += A; A := 0`
-- **DIVMOD** — `k` chained `deb R` plus an inc-run ⟶ `Qᵢ += R/k; goto exit[R mod k]; R := 0`
+- **ZERO** — `take R exit self` ⟶ `R := 0`
+- **TRANSFER** — `take A exit; give D₁…Dₙ; jmp` ⟶ `Dᵢ += A; A := 0`
+- **DIVMOD** — `k` chained `take R` plus a give-run ⟶ `Qᵢ += R/k; goto exit[R mod k]; R := 0`
 - **MULADD** — the two-transfer multiply loop ⟶ `Dᵢ += C·S + (C−1)·T; S += T; T,C := 0`
-- **ISZERO** — `deb R z; inc R nz` (the "is R zero?" idiom) ⟶ `goto R==0 ? z : nz` (R unchanged)
+- **ISZERO** — `take R z; give R nz` (the "is R zero?" idiom) ⟶ `goto R==0 ? z : nz` (R unchanged)
+- **COPY** — `TRANSFER S→{D…,T}; TRANSFER T→{S}` (the non-destructive copy) ⟶ `Dᵢ += S` (S kept)
+- **DIVBIN** — the "divide by a bin" loop: `take P full; take R out; give REM; jmp` with `full: take REM q; give P; jmp` / `q: give Q; jmp` ⟶ `Q += R div P; REM := R mod P` — a long division by the *value* of another register, in one bignum op
 
-It also threads no-op jumps (`deb R X X`, which a bare `label:` and `use`/`func`
+It also threads no-op jumps (`take R X X`, which a bare `label:` and `use`/`func`
 inlining produce a lot of) and dead-code-eliminates what that leaves behind.
 Both the interpreter and the QBE backend use the folded form, so `-O` speeds up
 interpretation as well as compilation. `examples/urm.bc` (a universal register
@@ -141,8 +146,21 @@ unusable without it and merely-slow with it.
 `factorial`, `fib`, `gcd`), predicates (`iseven`, `iszero`), text (`hello`,
 `cat`, `clock`, `dayOfWeek`), graphics demos (`life`, `langton`, `sierpinski`,
 `stars`, `gravity`, `dvd`, `bounce`, `paint`, `pong`), a chiptune (`chime`),
-the standard library (`std.bc`), and the universal machine (`urm.bc` — it runs
-any beancraft program supplied as one Gödel number; see `--emit-urm`).
+the standard library (`std.bc`), and two universal machines: `urm.bc` (runs
+any beancraft program supplied as one Gödel number; see `--emit-urm`) and
+`tally.bc` — **a universal machine in 62 moves**: the program is a string of
+tallies and the whole register bank is one number `2^v₀·3^v₁·5^v₂·…`, so `give`
+is a multiply and `take` is a divisibility test (see `--emit-tally` and
+[docs/LANGUAGE.md](docs/LANGUAGE.md#the-tally-machine)).
+
+```console
+$ ./beancraft --emit-tally examples/mul.bc A=7 B=8
+# examples/mul.bc -> tally.bc encoding (223 bits).  registers (prime): tmp=2 Out=3 B=5 A=7 :nil=11
+P=3369967621600483359339352413265736246534097109189619817923405937119 R=321696484375
+$ ./beancraft examples/tally.bc -O $(./beancraft --emit-tally examples/mul.bc A=7 B=8 | tail -1) | grep out1
+out1 = 56
+$ ./beancraft --emit-dot examples/mul.bc | dot -Tsvg > mul.svg
+```
 
 ```console
 $ ./beancraft examples/factorial.bc N=10 -O | grep Out
@@ -154,7 +172,7 @@ $ make sdl && ./beancraft examples/life.bc      # needs SDL; press q to quit
 
 ## Documentation
 
-- **[docs/LANGUAGE.md](docs/LANGUAGE.md)** — the `.bc` language reference: instructions, jump targets, register init, `use` modules, `func` definitions, the URM encoding.
+- **[docs/LANGUAGE.md](docs/LANGUAGE.md)** — the `.bc` language reference: instructions, jump targets, register init, `use` modules, `func` definitions, the URM and tally-machine encodings.
 - **[docs/DEVICES.md](docs/DEVICES.md)** — the magic device registers: console, screen/palette, audio, keyboard, mouse, clock, RNG, `sys/*`; terminal vs. SDL rendering.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the implementation: source → AST → loader → IR → optimizer → interpreter / QBE backend + runtime, and how to add an optimization or a device.
 
@@ -165,6 +183,7 @@ src/                C sources               include/beancraft/   public headers
   lexer,parser,ast    front end             test/                unit + example tests
   loader              use/func expansion    scripts/bccompile    .bc -> native binary
   ir, opt             IR + optimizer        examples/            ~50 .bc programs
+  dot                 --emit-dot graphs
   interp              tree-walking VM        web/wasm_main.c +    WebAssembly build
   qbe, qbe_runtime,   native backend +          web/index.html      (`make wasm`) + demo page
   qbe_driver          its C runtime          docs/                language / devices / architecture
