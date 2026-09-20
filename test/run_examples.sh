@@ -158,22 +158,40 @@ check "urm: add A=10 B=5 -> Out(s1)=15" "out1=15" examples/urm.bc -O $("$BC" --e
 check "urm: mul A=2 B=3 -> Out(s1)=6" "out1=6" examples/urm.bc -O $("$BC" --emit-urm examples/mul.bc A=2 B=3 | tail -1)
 
 # --- tally.bc: the 62-move universal machine (tally programs, prime registers) ---
-# out_k = the exponent of the k-th prime in R; --emit-tally prints the map.
+# Encode a program, run it through the machine, decode the final bank R.
 echo
-echo -e "${YELLOW}=== tally.bc (tally-encoded universal machine; out_k = exponent of prime k) ===${NC}"
-check "tally: iseven N=4 -> Even(2)=1"   "out0=1"  examples/tally.bc -O $("$BC" --emit-tally examples/iseven.bc N=4 | tail -1)
-check "tally: iseven N=7 -> Even(2)=0"   "out0=0"  examples/tally.bc -O $("$BC" --emit-tally examples/iseven.bc N=7 | tail -1)
-check "tally: iszero N=0 -> Zero(2)=1"   "out0=1"  examples/tally.bc -O $("$BC" --emit-tally examples/iszero.bc N=0 | tail -1)
-check "tally: add A=10 B=5 -> Out(3)=15" "out1=15" examples/tally.bc -O $("$BC" --emit-tally examples/add.bc A=10 B=5 | tail -1)
-check "tally: mul A=2 B=3 -> Out(3)=6"   "out1=6"  examples/tally.bc -O $("$BC" --emit-tally examples/mul.bc A=2 B=3 | tail -1)
-check "tally: mul A=7 B=8 -> Out(3)=56"  "out1=56" examples/tally.bc -O $("$BC" --emit-tally examples/mul.bc A=7 B=8 | tail -1)
-check "tally: fib N=10 -> Out(11): R=11^89" "R=1890591424712781041871514584574319778449301246603238034051" examples/tally.bc -O $("$BC" --emit-tally examples/fib.bc N=10 | tail -1)
-# The machine proper is IR instructions 0..60 plus the stop they jump to: 62.
-if "$BC" --show-ir -n examples/tally.bc | grep -q '^ *61: unpack'; then
-    echo -e "${GREEN}PASS${NC}: tally.bc's machine is 62 moves (unpack starts at instruction 61)"
+echo -e "${YELLOW}=== tally.bc (tally-encoded universal machine; encode -> run -> decode) ===${NC}"
+tally_run() {   # tally_run "name" "REG=EXPECT" file.bc REG=VALUE...
+    local name="$1" expected="$2" f="$3"; shift 3
+    local enc; enc=$("$BC" --emit-tally "$f" "$@" | tail -1)
+    local R; R=$("$BC" examples/tally.bc -O -s 1000000000 $enc | grep '^R = ' | sed 's/R = //')
+    check "$name" "$expected" --decode-tally "$f" "R=$R"
+}
+tally_run "tally: iseven N=4 -> Even=1"    "Even=1"  examples/iseven.bc N=4
+tally_run "tally: iseven N=7 -> Even=0"    "Even=0"  examples/iseven.bc N=7
+tally_run "tally: iszero N=0 -> Zero=1"    "Zero=1"  examples/iszero.bc N=0
+tally_run "tally: add A=10 B=5 -> Out=15"  "Out=15"  examples/add.bc A=10 B=5
+tally_run "tally: mul A=2 B=3 -> Out=6"    "Out=6"   examples/mul.bc A=2 B=3
+tally_run "tally: mul A=7 B=8 -> Out=56"   "Out=56"  examples/mul.bc A=7 B=8
+tally_run "tally: fib N=10 -> Out=55"      "Out=55"  examples/fib.bc N=10
+tally_run "tally: gcd 48 18 -> Out=6"      "Out=6"   examples/gcd.bc A=48 B=18
+tally_run "tally: factorial N=5 -> Out=120" "Out=120" examples/factorial.bc N=5
+# The whole file is the machine: 61 instructions plus the implicit stop = 62.
+if "$BC" -n examples/tally.bc | grep -q '^Parse OK: 62 instructions'; then
+    echo -e "${GREEN}PASS${NC}: tally.bc is 62 moves"
     ((PASS++))
 else
-    echo -e "${RED}FAIL${NC}: tally.bc's machine is no longer 62 moves"
+    echo -e "${RED}FAIL${NC}: tally.bc is no longer 62 moves: $("$BC" -n examples/tally.bc)"
+    ((FAIL++))
+fi
+# The encoder threads bare-label no-ops away: iseven.bc's `result:` label
+# must not cost a prime or an instruction.
+if "$BC" --emit-tally examples/iseven.bc | head -1 | grep -q '4 instructions' \
+   && ! "$BC" --emit-tally examples/iseven.bc | head -1 | grep -q ':nil'; then
+    echo -e "${GREEN}PASS${NC}: emit-tally strips bare-label no-ops (iseven.bc -> 4 instructions, no :nil)"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC}: emit-tally did not strip the no-op: $("$BC" --emit-tally examples/iseven.bc | head -1)"
     ((FAIL++))
 fi
 
@@ -253,6 +271,10 @@ if command -v qbe >/dev/null 2>&1 && [ -x "$BCCOMPILE" ]; then
         check_bin "compiled pow -O: 0^0 = 1"          "Out=1"        "$CTMP/pow" Base=0 Exp=0
         check_bin "compiled pow -O: 2^10 = 1024"      "Out=1024"     "$CTMP/pow" Base=2 Exp=10
         check_bin "compiled pow -O: 7^3 = 343"        "Out=343"      "$CTMP/pow" Base=7 Exp=3
+    fi
+    if "$BCCOMPILE" -O examples/tally.bc "$CTMP/tally" >/dev/null 2>&1; then
+        enc=$("$BC" --emit-tally examples/mul.bc A=7 B=8 | tail -1)
+        check_bin "compiled tally -O: mul 7*8 -> R = 3^56 * 5^7 (Out=3, A=5)" "R=$(python3 -c 'print(3**56*5**7)')" "$CTMP/tally" $enc
     fi
     # Compiled -O0 (no folds) must still be correct.
     if "$BCCOMPILE" -O0 examples/mul.bc "$CTMP/mul0" >/dev/null 2>&1; then

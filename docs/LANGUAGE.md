@@ -277,7 +277,8 @@ $ ./beancraft file.bc [REG=VALUE ...] [options]
   initial registers) Gödel-encoded for `examples/urm.bc` (the universal machine;
   see below).
 - `--emit-tally` — the same for `examples/tally.bc`, the 62-move universal
-  machine (see [The tally machine](#the-tally-machine)).
+  machine; `--decode-tally file.bc R=…` reads a bank back into named registers
+  (see [The tally machine](#the-tally-machine)).
 - `--emit-dot` (alias `--show-dot`) — print the lowered program as a
   [Graphviz](https://graphviz.org/) graph and exit. Each `give` is a circle and
   each `take` a diamond, both labelled with the register; the diamond's
@@ -341,8 +342,9 @@ out3 = 2     # A
 ## The tally machine
 
 `examples/tally.bc` is a second universal machine, built for reading rather than
-for speed: **62 moves** (61 instructions plus the `stop` they jump to) that run
-any beancraft program. Its two inputs are single numbers:
+for speed: **62 moves** — 61 instructions plus the `stop` they jump to, and
+that is the whole file — that run any beancraft program. Its two inputs are
+single numbers:
 
 - **`P`, the program, as tallies.** A field holding `n` is `n` one-bits followed
   by a zero; fields are laid end to end, least-significant bit first, so the
@@ -354,15 +356,14 @@ any beancraft program. Its two inputs are single numbers:
   | `take r → a / b` | `2p+1`, `a`, `b` |
   | `stop` | `0` (the empty tally) |
 
-  where `p` is the prime that stands for register `r` (the first register is
-  `2`, the second `3`, then `5`, …) and a jump target is the **field offset** of
-  the instruction it names (the machine's `PC` counts fields). Reading past the
-  end of `P` yields empty tallies forever, i.e. `stop`, so a trailing `stop`
-  costs no bits at all.
-- **`R`, the bank of registers, as one number:** `R = 2^v₀ · 3^v₁ · 5^v₂ · …`.
-  `give r` multiplies `R` by `p`; `take r` asks whether `p` divides `R` — if it
-  does, `R := R / p` (a bean came out), if not, the bin was empty. The empty
-  bank is `R = 1`, so `R` must never start at `0`.
+  where `p` is the prime that stands for register `r` and a jump target is the
+  **field offset** of the instruction it names (the machine's `PC` counts
+  fields). Reading past the end of `P` yields empty tallies forever, i.e.
+  `stop`, so a trailing `stop` costs no bits at all.
+- **`R`, the bank of registers, as one number:** `R = ∏ p_r^(v_r)`. `give r`
+  multiplies `R` by `p`; `take r` asks whether `p` divides `R` — if it does,
+  `R := R / p` (a bean came out), if not, the bin was empty. The empty bank is
+  `R = 1`, so `R` must never start at `0`.
 
 Because each instruction carries its own prime, the machine never has to compute
 primes; it only multiplies by, or divides by, a number it has just read. The
@@ -371,18 +372,29 @@ register — is the loop the optimizer folds as `DIVBIN`, so with `-O` a simulat
 `take` is one bignum op and a simulated step costs O(bits of `P` before the
 instruction). Without `-O` a single halving of `P` is exponential in its length.
 
+`--emit-tally` does three things to keep `P` short before encoding: it threads
+away bare-label no-ops and drops unreachable instructions and trailing `stop`s
+(a jump past the end already means `stop`); and it hands out primes by how often
+a register is named — the most-mentioned register gets `2` — since a `give` of a
+register on prime `p` costs `2p` bits every time it appears. The map it prints is
+what `--decode-tally` uses to factor the final bank back into names.
+
 ```console
 $ ./beancraft --emit-tally examples/mul.bc A=2 B=3
-# examples/mul.bc -> tally.bc encoding (223 bits).  registers (prime): tmp=2 Out=3 B=5 A=7 :nil=11
-P=3369967621600483359339352413265736246534097109189619817923405937119 R=6125
-$ ./beancraft examples/tally.bc -O P=3369967621600483359339352413265736246534097109189619817923405937119 R=6125
-...
-R = 49          # 7^2: A survived; Out (3^6) was unpacked below
-out0 = 0        # tmp   (prime 2)
-out1 = 6        # Out   (prime 3)  = 2 * 3
-out2 = 0        # B     (prime 5)
+# examples/mul.bc -> tally.bc encoding: 8 instructions, 218 bits.  registers (prime): tmp=2 Out=3 A=5 B=7
+P=210622975614431643255944712187008394406281938408708122559079250399 R=8575
+$ ./beancraft examples/tally.bc -O P=2106…0399 R=8575 | grep '^R ='
+R = 18225                     # = 3^6 * 5^2
+$ ./beancraft --decode-tally examples/mul.bc R=18225
+Results:
+tmp = 0
+Out = 6
+A = 2
+B = 0
 ```
 
-What follows the machine's `unpack:` label in the file is a convenience that
-factors the first three primes back out of `R` into `out0..out2`; it is not
-part of the machine.
+The machine encodes *itself* to 8,743 bits; `docs/tally_P.pdf` prints that
+number on one page. Running it on itself is another matter: the inner program
+becomes an exponent in the outer bank (`31^P`), and the inner machine runs
+unfolded, so even a two-instruction addition would take on the order of a
+month.

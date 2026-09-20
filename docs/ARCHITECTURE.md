@@ -36,10 +36,12 @@ Everything in the front end is allocated from a single bump **`Arena`**
 
 `src/main.c` is the CLI: parse args, run the pipeline, optionally dump
 `--show-ast` / `--show-ir` / `--show-opt`, then either interpret or `--emit-qbe`.
-The other emitters work off the `IrProgram`: `--emit-urm` / `--emit-tally`
-encode it for the two universal machines, and `--emit-dot` (`src/dot.c`) prints
-it as a Graphviz graph — bare-label no-ops are threaded away so the picture
-shows only real `give`/`take`/`stop` nodes.
+The other emitters work off the `IrProgram`: `--emit-urm` encodes it for
+`urm.bc`; `--emit-tally` / `--decode-tally` (`src/tally.c`: `tally_layout`
+cleans the program and assigns primes by mention count, then `tally_program`,
+`tally_bank`, `tally_decode`) for `tally.bc`; and `--emit-dot` (`src/dot.c`)
+prints it as a Graphviz graph. Both `tally.c` and `dot.c` thread bare-label
+no-ops away so only real `give`/`take`/`stop` instructions appear.
 
 ## Stage 1 — lexer + parser → AST
 

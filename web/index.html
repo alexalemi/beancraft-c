@@ -216,7 +216,11 @@ loop:   - N result
         - Even setOne loop
 result:
 ` },
-  "Tally — a universal machine in 62 moves": { args: "P=3369967621600483359339352413265736246534097109189619817923405937119 R=6125", src: `# tally.bc -- a universal register machine in 62 moves.
+  "Tally — a universal machine in 62 moves": { args: "P=210622975614431643255944712187008394406281938408708122559079250399 R=8575",
+    // mul.bc (Out := A * B) with A=2 B=3, encoded by `beancraft --emit-tally`.
+    // The machine's answer is the bank R; the page factors it by these primes.
+    decode: { 2: "tmp", 3: "Out", 5: "A", 7: "B" },
+    src: `# tally.bc -- a universal register machine in 62 moves.
 #
 # It runs any beancraft program handed to it as two numbers:
 #
@@ -243,12 +247,12 @@ result:
 # halving of P is exponential in P's bit length.
 #
 #   beancraft --emit-tally file.bc [REG=VALUE...]   prints P=... R=...
-#   beancraft examples/tally.bc -O P=<...> R=<...>
+#   beancraft examples/tally.bc -O P=<...> R=<...>   prints the final R
 #
-# The machine proper is the 61 instructions from \`step\` to \`s3\`, plus the
-# \`stop\` they jump to: 62 moves.  What follows \`unpack:\` is a convenience
-# that factors the first three primes back out of R into out0..out2 so the
-# answer is readable; it is not part of the machine.
+# That is the whole file: 61 instructions from \`step\` to \`s3\`, plus the
+# \`stop\` they jump to -- 62 moves.  At halt the answer is the bank R; read it
+# back into named registers with
+#   beancraft --decode-tally file.bc R=<the final R>
 #
 # Registers:  P R PC          the program, the bank, the program counter
 #             Pw t P2 X s     a working copy of P, copy temp, halving temp,
@@ -310,7 +314,7 @@ isP2:    take X giveK              # even -> give;  odd -> take;   p := X div 2
          give p isP2
 
 # ---- give:  R := p * R ------------------------------------------------------
-giveK:   take p unpack             # p == 0: the empty tally is \`stop\`.  else p := p-1
+giveK:   take p done               # p == 0: the empty tally is \`stop\`.  else p := p-1
 m0:      take p mdone              # M := (p-1) * R        (R kept: MULADD)
 m1:      take R m2
          give M
@@ -331,55 +335,6 @@ isTakeA: take X s3                 # PC := a
 s3:      give s                    # s := 3; read the second target
          give s
          give s rd
-
-# =============================================================================
-# Not part of the machine: unpack the first three registers so the result
-# prints readably.  out0, out1, out2 := the exponents of 2, 3, 5 in R.
-# (R is left with those factors divided out.)
-# =============================================================================
-unpack:  take R d2                 # R = 2Q + r, r in {0, 1}
-         take R n2
-         give Q unpack
-d2:      take Q i2                 # r == 0: R := Q, count one
-         give R d2
-i2:      give out0 unpack
-n2:      give R r2                 # r == 1: R := 2Q + 1
-r2:      take Q u3
-         give R
-         give R r2
-u3:      take R d3                 # R = 3Q + r
-         take R n3a
-         take R n3b
-         give Q u3
-d3:      take Q i3
-         give R d3
-i3:      give out1 u3
-n3b:     give R n3a
-n3a:     give R r3
-r3:      take Q u5
-         give R
-         give R
-         give R r3
-u5:      take R d5                 # R = 5Q + r
-         take R n5a
-         take R n5b
-         take R n5c
-         take R n5d
-         give Q u5
-d5:      take Q i5
-         give R d5
-i5:      give out2 u5
-n5d:     give R n5c
-n5c:     give R n5b
-n5b:     give R n5a
-n5a:     give R r5
-r5:      take Q fin
-         give R
-         give R
-         give R
-         give R
-         give R r5
-fin:
 ` },
   "Bounce — live animation": { args: "", src: `# A red pixel walking diagonally, wrapping; leaves a trail. Live at ~60 Hz —
 # every 'give screen/flush' paints the canvas. Press any key to stop (or let
@@ -448,6 +403,22 @@ addn 10 con/byte       # '\\n'
 give con/emit
 ` },
 };
+
+// For the tally machine: factor the final bank R = 2^a * 3^b * ... back into
+// the simulated program's registers, using the example's prime -> name map.
+function decodeBank(result) {
+  const ex = EXAMPLES[exampleSel.value];
+  const m = result.match(/^R = (\d+)$/m);
+  if (!ex || !ex.decode || !m) return "";
+  let R = BigInt(m[1]);
+  const lines = [];
+  for (const [p, name] of Object.entries(ex.decode)) {
+    const P = BigInt(p); let e = 0;
+    while (R > 0n && R % P === 0n) { R /= P; e++; }
+    lines.push(`${name} (${p}) = ${e}`);
+  }
+  return "\n\n— decoded bank —\n" + lines.join("\n") + (R !== 1n ? `\nleftover ${R}` : "");
+}
 
 const $ = (id) => document.getElementById(id);
 const exampleSel = $("example"), srcEl = $("src"), argsEl = $("args"),
@@ -619,7 +590,7 @@ async function run() {
   const ms = (performance.now() - t0).toFixed(1);
 
   outEl.textContent = stdoutBuf || "(no console output)";
-  resEl.textContent = result || "(no registers)";
+  resEl.textContent = (result || "(no registers)") + decodeBank(result);
   if (result.startsWith("error:")) resEl.classList.add("err");
   drawScreen();
   statusEl.textContent = `done in ${ms} ms`;

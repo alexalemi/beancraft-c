@@ -97,6 +97,7 @@ $ ./beancraft [options] file.bc [REG=VALUE ...]
 | `--emit-qbe` | emit QBE IL to stdout, then exit (combine with `-O`) |
 | `--emit-urm` | emit the program (and registers) Gödel-encoded for `examples/urm.bc`, then exit |
 | `--emit-tally` | emit the program (and registers) tally-encoded for `examples/tally.bc`, the 62-move universal machine, then exit |
+| `--decode-tally` | read a `tally.bc` register bank (`R=VALUE`) back into the program's named registers |
 | `--emit-dot` (alias `--show-dot`) | emit the program as a [Graphviz](https://graphviz.org/) graph, then exit — pipe into `dot -Tsvg`. `give`s are circles, `take`s are diamonds whose empty-bin branch leaves from the side with a small open circle at its tail |
 
 `REG=VALUE` arguments set a register's initial value before the run (the value
@@ -155,10 +156,16 @@ is a multiply and `take` is a divisibility test (see `--emit-tally` and
 
 ```console
 $ ./beancraft --emit-tally examples/mul.bc A=7 B=8
-# examples/mul.bc -> tally.bc encoding (223 bits).  registers (prime): tmp=2 Out=3 B=5 A=7 :nil=11
-P=3369967621600483359339352413265736246534097109189619817923405937119 R=321696484375
-$ ./beancraft examples/tally.bc -O $(./beancraft --emit-tally examples/mul.bc A=7 B=8 | tail -1) | grep out1
-out1 = 56
+# examples/mul.bc -> tally.bc encoding: 8 instructions, 218 bits.  registers (prime): tmp=2 Out=3 A=5 B=7
+P=210622975614431643255944712187008394406281938408708122559079250399 R=450375078125
+$ ./beancraft examples/tally.bc -O $(./beancraft --emit-tally examples/mul.bc A=7 B=8 | tail -1) | grep '^R ='
+R = 40886533830262541969805587578125
+$ ./beancraft --decode-tally examples/mul.bc R=40886533830262541969805587578125
+Results:
+tmp = 0
+Out = 56
+A = 7
+B = 0
 $ ./beancraft --emit-dot examples/mul.bc | dot -Tsvg > mul.svg
 ```
 
@@ -183,7 +190,7 @@ src/                C sources               include/beancraft/   public headers
   lexer,parser,ast    front end             test/                unit + example tests
   loader              use/func expansion    scripts/bccompile    .bc -> native binary
   ir, opt             IR + optimizer        examples/            ~50 .bc programs
-  dot                 --emit-dot graphs
+  dot, tally          --emit-dot graphs; tally.bc encode/decode
   interp              tree-walking VM        web/wasm_main.c +    WebAssembly build
   qbe, qbe_runtime,   native backend +          web/index.html      (`make wasm`) + demo page
   qbe_driver          its C runtime          docs/                language / devices / architecture

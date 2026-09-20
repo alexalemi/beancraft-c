@@ -10,6 +10,7 @@
 #include "beancraft/devices.h"
 #include "beancraft/debug.h"
 #include "beancraft/dot.h"
+#include "beancraft/tally.h"
 #include "beancraft/error.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -43,44 +44,6 @@ static Bignum bn_cons(uint64_t head, Bignum tail) {   // pair(head, tail); consu
     return out;
 }
 
-// --- tally-encoding helpers (used only by --emit-tally) --------------------
-// examples/tally.bc reads its program as a string of tallies: a field holding n
-// is n one-bits followed by a zero, fields are concatenated least-significant
-// bit first, and the bank of registers is one number, 2^v0 * 3^v1 * 5^v2 * ...
-
-static uint64_t nth_prime(uint32_t n) {          // 0 -> 2, 1 -> 3, 2 -> 5, ...
-    uint64_t c = 1;
-    for (uint32_t found = 0; ; ) {
-        c++;
-        bool prime = true;
-        for (uint64_t d = 2; d * d <= c; d++) if (c % d == 0) { prime = false; break; }
-        if (prime && found++ == n) return c;
-    }
-}
-
-typedef struct { uint8_t *bits; size_t n, cap; } BitVec;
-
-static void bits_push(BitVec *v, uint8_t b) {
-    if (v->n == v->cap) { v->cap = v->cap ? v->cap * 2 : 256; v->bits = realloc(v->bits, v->cap); }
-    v->bits[v->n++] = b;
-}
-
-static void bits_tally(BitVec *v, uint64_t n) {   // n marks, then the zero that ends the field
-    for (uint64_t i = 0; i < n; i++) bits_push(v, 1);
-    bits_push(v, 0);
-}
-
-static Bignum bits_to_bignum(const BitVec *v) {   // bits[0] is the least significant
-    Bignum acc = bignum_from_u64(0);
-    for (size_t i = v->n; i-- > 0; ) {
-        Bignum d = bignum_add(acc, acc);
-        bignum_free(&acc);
-        acc = d;
-        if (v->bits[i]) bignum_inc(&acc);
-    }
-    return acc;
-}
-
 static void print_usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [options] <file.bc> [REG=VALUE...]\n"
@@ -96,6 +59,7 @@ static void print_usage(const char *prog) {
         "  --emit-qbe          Output QBE intermediate language (for compilation)\n"
         "  --emit-urm          Output the program (and registers) Gödel-encoded for examples/urm.bc\n"
         "  --emit-tally        Output the program (and registers) tally-encoded for examples/tally.bc\n"
+        "  --decode-tally      Read a tally.bc register bank (R=VALUE) back into named registers\n"
         "  --emit-dot          Output the program as a Graphviz graph (--show-dot is an alias)\n"
         "  -O, --optimize      Enable loop optimizations\n"
         "  --show-opt          Print the optimized IR (implies -O)\n"
@@ -157,6 +121,7 @@ static struct option long_options[] = {
     {"emit-qbe",   no_argument,       NULL, 'Q'},
     {"emit-urm",   no_argument,       NULL, 'U'},
     {"emit-tally", no_argument,       NULL, 'Y'},
+    {"decode-tally", no_argument,     NULL, 'y'},
     {"emit-dot",   no_argument,       NULL, 'G'},
     {"show-dot",   no_argument,       NULL, 'G'},
     {"optimize",   no_argument,       NULL, 'O'},
@@ -178,6 +143,7 @@ int main(int argc, char *argv[]) {
     bool emit_qbe = false;
     bool emit_urm = false;
     bool emit_tally = false;
+    bool decode_tally = false;
     bool emit_dot = false;
     bool optimize = false;
     bool show_opt = false;
@@ -220,6 +186,9 @@ int main(int argc, char *argv[]) {
             break;
         case 'Y':
             emit_tally = true;
+            break;
+        case 'y':
+            decode_tally = true;
             break;
         case 'G':
             emit_dot = true;
@@ -314,79 +283,72 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    if (emit_tally) {
-        // Encode for examples/tally.bc. Register i lives in the exponent of the
-        // i-th prime of the bank R; an instruction is a run of tally fields:
-        //   give r -> a        2*p_r,     a
-        //   take r -> a / b    2*p_r + 1, a, b
-        //   stop               0                (the empty tally)
-        // where a jump target is the field offset of its instruction (the
-        // machine's PC counts fields, so it can skip to any instruction).
-        uint32_t *field_off = arena_alloc(arena, (prog->inst_count + 1) * sizeof(uint32_t));
-        uint32_t off = 0;
-        for (uint32_t i = 0; i < prog->inst_count; i++) {
-            field_off[i] = off;
-            off += prog->insts[i].op == IR_INC ? 2 : prog->insts[i].op == IR_DEB ? 3 : 1;
-        }
-        field_off[prog->inst_count] = off;
+    if (emit_tally || decode_tally) {
+        // The encoding examples/tally.bc reads (src/tally.c): the program as
+        // a tally string P, the registers as one number R = prod p_r^v_r.
+        TallyLayout lay;
+        tally_layout(arena, prog, &lay);
 
-        BitVec bits = { 0 };
-        for (uint32_t i = 0; i < prog->inst_count; i++) {
-            const IrInst *in = &prog->insts[i];
-            switch (in->op) {
-            case IR_INC:
-                bits_tally(&bits, 2 * nth_prime(in->reg));
-                bits_tally(&bits, field_off[in->arg_a]);
-                break;
-            case IR_DEB:
-                bits_tally(&bits, 2 * nth_prime(in->reg) + 1);
-                bits_tally(&bits, field_off[in->arg_a]);
-                bits_tally(&bits, field_off[in->arg_b]);
-                break;
-            case IR_END:
-            default:
-                bits_tally(&bits, 0);
-                break;
-            }
-        }
-        Bignum P = bits_to_bignum(&bits);
-
-        Bignum R = bignum_from_u64(1);          // every exponent 0
-        for (int i = optind + 1; i < argc; i++) {   // REG=VALUE -> p_reg^VALUE
+        // REG=VALUE arguments (bignums) -- the initial bank for --emit-tally,
+        // or the bank to decode for --decode-tally (its R=... argument).
+        Bignum *vals = arena_alloc(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(Bignum));
+        for (uint32_t i = 0; i < prog->reg_count; i++) vals[i] = bignum_from_u64(prog->reg_init[i]);
+        Bignum bank = bignum_zero();
+        bool have_bank = false;
+        for (int i = optind + 1; i < argc; i++) {
             char *eq = strchr(argv[i], '=');
             if (!eq) continue;
             *eq = '\0';
-            int32_t idx = ir_find_reg(prog, argv[i]);
+            if (decode_tally && strcmp(argv[i], "R") == 0) {
+                bignum_free(&bank);
+                bank = bignum_from_string(eq + 1);
+                have_bank = true;
+            } else {
+                int32_t idx = ir_find_reg(prog, argv[i]);
+                if (idx >= 0) { bignum_free(&vals[idx]); vals[idx] = bignum_from_string(eq + 1); }
+                else fprintf(stderr, "Warning: unknown register '%s'\n", argv[i]);
+            }
             *eq = '=';
-            if (idx < 0) continue;
-            uint64_t v = (uint64_t)atoll(eq + 1);
-            Bignum pr = bignum_from_u64(nth_prime((uint32_t)idx));
-            for (uint64_t k = 0; k < v; k++) {
-                Bignum m = bignum_mul(R, pr);
-                bignum_free(&R);
-                R = m;
-            }
-            bignum_free(&pr);
-        }
-        for (uint32_t i = 0; i < prog->reg_count; i++) {   // `use`-seeded initial values
-            Bignum pr = bignum_from_u64(nth_prime(i));
-            for (uint64_t k = 0; k < prog->reg_init[i]; k++) {
-                Bignum m = bignum_mul(R, pr);
-                bignum_free(&R);
-                R = m;
-            }
-            bignum_free(&pr);
         }
 
-        printf("# %s -> tally.bc encoding (%zu bits).  registers (prime):", filename, bits.n);
-        for (uint32_t i = 0; i < prog->reg_count; i++)
-            printf(" %s=%" PRIu64, prog->reg_names[i]->data, nth_prime(i));
+        if (decode_tally) {
+            if (!have_bank) {
+                fprintf(stderr, "Error: --decode-tally needs the bank as R=VALUE\n");
+                arena_free(arena);
+                return 1;
+            }
+            Bignum *out = arena_alloc(arena, (prog->reg_count ? prog->reg_count : 1) * sizeof(Bignum));
+            Bignum rest = tally_decode(&lay, bank, out);
+            printf("Results:\n");
+            for (uint32_t i = 0; i < lay.used_count; i++) {
+                uint32_t r = lay.by_prime[i];
+                if (prog->reg_names[r]->data[0] == ':') continue;
+                char *v = bignum_to_string(out[r]);
+                printf("%s = %s\n", prog->reg_names[r]->data, v);
+                free(v);
+            }
+            if (!bignum_eq(rest, bignum_from_u64(1))) {
+                char *v = bignum_to_string(rest);
+                fprintf(stderr, "Warning: R has a leftover factor %s that no register's prime divides\n", v);
+                free(v);
+            }
+            arena_free(arena);
+            return 0;
+        }
+
+        Bignum P = tally_program(&lay);
+        Bignum R = tally_bank(&lay, vals);
+        printf("# %s -> tally.bc encoding: %u instructions, %zu bits.  registers (prime):",
+               filename, lay.inst_count, lay.bit_count);
+        for (uint32_t i = 0; i < lay.used_count; i++) {
+            uint32_t r = lay.by_prime[i];
+            printf(" %s=%" PRIu64, prog->reg_names[r]->data, lay.prime_of[r]);
+        }
         printf("\n");
         char *ps = bignum_to_string(P), *rs = bignum_to_string(R);
         printf("P=%s R=%s\n", ps, rs);
         free(ps); free(rs);
         bignum_free(&P); bignum_free(&R);
-        free(bits.bits);
         arena_free(arena);
         return 0;
     }
