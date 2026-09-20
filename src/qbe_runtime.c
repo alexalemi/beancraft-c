@@ -75,6 +75,28 @@ void bc_muladd(Bignum *regs, uint64_t c, uint64_t s, uint64_t t,
     bignum_free(&addend);
 }
 
+// The folded "divide by a bin" loop: long division of regs[r] by the *value*
+// of regs[p].  Q += R div P;  REM := R mod P;  X_i += R;  P := P - REM - 1;
+// R := 0.  `xs` holds the m extra accumulator indices (NULL when m == 0).
+// Returns 1 without touching anything when P == 0: the source loop never
+// terminates, and the generated code spins on the instruction instead.
+int bc_divbin(Bignum *regs, uint64_t r, uint64_t p, uint64_t rem, uint64_t q,
+              const uint64_t *xs, uint64_t m) {
+    if (bignum_is_zero(regs[p])) return 1;
+    for (uint64_t i = 0; i < m; i++) bignum_add_into(&regs[xs[i]], regs[r]);
+    Bignum rm;
+    bignum_divmod(&regs[r], regs[p], &rm);      // regs[r] := quotient
+    bignum_add_into(&regs[q], regs[r]);
+    bignum_set_zero(&regs[r]);
+    Bignum p_left = bignum_sub(regs[p], rm);    // P - REM - 1  (REM < P)
+    bignum_dec(&p_left);
+    bignum_free(&regs[p]);
+    regs[p] = p_left;
+    bignum_free(&regs[rem]);
+    regs[rem] = rm;
+    return 0;
+}
+
 // --- helpers invoked from generated code and the driver -------------------
 
 // Numeric view of a register: the exact value if it fits in 64 bits, otherwise

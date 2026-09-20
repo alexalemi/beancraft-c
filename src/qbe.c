@@ -243,11 +243,19 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
     // array isn't an option). m == 0 MULADDs pass a null pointer instead.
     for (uint32_t i = 0; i < prog->inst_count; i++) {
         const IrOptInst *inst = &prog->insts[i];
-        if (inst->op != IR_OPT_MULADD || inst->dest_count <= 2) continue;
-        buf_printf(&buf, "data $bc_muladd_d%u = align 8 {", i);
-        for (uint32_t d = 2; d < inst->dest_count; d++)
-            buf_printf(&buf, "%s l %u", d > 2 ? "," : "", prog->dests[inst->dest_off + d]);
-        buf_puts(&buf, " }\n");
+        if (inst->op == IR_OPT_MULADD && inst->dest_count > 2) {
+            buf_printf(&buf, "data $bc_muladd_d%u = align 8 {", i);
+            for (uint32_t d = 2; d < inst->dest_count; d++)
+                buf_printf(&buf, "%s l %u", d > 2 ? "," : "", prog->dests[inst->dest_off + d]);
+            buf_puts(&buf, " }\n");
+        }
+        // Likewise a DIVBIN's extra accumulators X_i (dests[3..]) for $bc_divbin.
+        if (inst->op == IR_OPT_DIVBIN && inst->dest_count > 3) {
+            buf_printf(&buf, "data $bc_divbin_x%u = align 8 {", i);
+            for (uint32_t d = 3; d < inst->dest_count; d++)
+                buf_printf(&buf, "%s l %u", d > 3 ? "," : "", prog->dests[inst->dest_off + d]);
+            buf_puts(&buf, " }\n");
+        }
     }
     buf_puts(&buf, "\n");
 
@@ -352,6 +360,26 @@ BcResult qbe_generate_opt(FILE *out, const IrOptProgram *prog, QbeOptions opts) 
                 buf_puts(&buf, "l 0, l 0, ");
             buf_printf(&buf, "l %u)\n", inst->arg_b ? 1u : 0u);   // T precleared each round?
             buf_printf(&buf, "    jmp @inst_%u\n\n", inst->arg_a);
+            break;
+        }
+
+        case IR_OPT_DIVBIN: {
+            // dests = [P, REM, Q, X_1..X_m]. One runtime call; it returns 1 when
+            // P == 0, in which case the source loop never terminates -- so this
+            // block jumps back to itself (the step-cap check ends it).
+            const uint32_t *d = &prog->dests[inst->dest_off];
+            uint32_t m = inst->dest_count - 3;
+            if (opts.emit_debug_info)
+                buf_printf(&buf, "    # DIVBIN %s / %s -> quot %s, rem %s\n",
+                           prog->reg_names[inst->reg]->data, prog->reg_names[d[0]]->data,
+                           prog->reg_names[d[2]]->data, prog->reg_names[d[1]]->data);
+            buf_puts(&buf, "    %spin =w call $bc_divbin(l $bc_regs, ");
+            buf_printf(&buf, "l %u, l %u, l %u, l %u, ", inst->reg, d[0], d[1], d[2]);
+            if (m > 0)
+                buf_printf(&buf, "l $bc_divbin_x%u, l %u)\n", i, m);
+            else
+                buf_puts(&buf, "l 0, l 0)\n");
+            buf_printf(&buf, "    jnz %%spin, @inst_%u, @inst_%u\n\n", i, inst->arg_a);
             break;
         }
 

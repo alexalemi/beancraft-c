@@ -411,6 +411,114 @@ uint64_t bignum_divmod_small(Bignum *x, uint64_t k) {
     return rem;
 }
 
+// View any bignum as a little-endian base-2^64 limb array (an immediate
+// becomes one limb held in *inline_slot).
+static const uint64_t *as_limbs(Bignum x, uint64_t *inline_slot, uint32_t *len) {
+    if (bignum_is_immediate(x)) {
+        *inline_slot = bignum_get_immediate(x);
+        *len = 1;
+        return inline_slot;
+    }
+    BigLimbs *l = bignum_get_ptr(x);
+    *len = l->len;
+    return l->limbs;
+}
+
+// Wrap a heap limb array (which this takes ownership of) as a Bignum:
+// normalize, and demote to an immediate when it fits.
+static Bignum limbs_finish(BigLimbs *r) {
+    while (r->len > 1 && r->limbs[r->len - 1] == 0) r->len--;
+    if (r->len == 1 && r->limbs[0] <= BIGNUM_MAX_IMMEDIATE) {
+        uint64_t v = r->limbs[0];
+        free(r);
+        return bignum_make_immediate(v);
+    }
+    return (Bignum)r;
+}
+
+// Compare two limb arrays of the given lengths (leading zero limbs allowed).
+static int limbs_cmp(const uint64_t *a, uint32_t an, const uint64_t *b, uint32_t bn) {
+    uint32_t n = an > bn ? an : bn;
+    for (uint32_t i = n; i-- > 0; ) {
+        uint64_t ai = i < an ? a[i] : 0, bi = i < bn ? b[i] : 0;
+        if (ai != bi) return ai > bi ? 1 : -1;
+    }
+    return 0;
+}
+
+// a -= b in place (a >= b, an >= bn).
+static void limbs_sub_inplace(uint64_t *a, uint32_t an, const uint64_t *b, uint32_t bn) {
+    uint64_t borrow = 0;
+    for (uint32_t i = 0; i < an; i++) {
+        uint64_t bi = i < bn ? b[i] : 0;
+        uint64_t d = a[i] - bi - borrow;
+        borrow = (a[i] < bi || (borrow && a[i] == bi)) ? 1 : 0;
+        a[i] = d;
+    }
+}
+
+Bignum bignum_sub(Bignum a, Bignum b) {
+    if (bignum_is_immediate(a) && bignum_is_immediate(b)) {
+        uint64_t va = bignum_get_immediate(a), vb = bignum_get_immediate(b);
+        return bignum_make_immediate(va >= vb ? va - vb : 0);
+    }
+    uint64_t ai, bi;
+    uint32_t an, bn;
+    const uint64_t *al = as_limbs(a, &ai, &an);
+    const uint64_t *bl = as_limbs(b, &bi, &bn);
+    if (limbs_cmp(al, an, bl, bn) < 0) return bignum_zero();   // saturate
+    BigLimbs *r = limbs_alloc(an);
+    memcpy(r->limbs, al, an * sizeof(uint64_t));
+    r->len = an;
+    limbs_sub_inplace(r->limbs, an, bl, bn);
+    return limbs_finish(r);
+}
+
+void bignum_divmod(Bignum *x, Bignum d, Bignum *rem) {
+    // d > 0 is a precondition. A small divisor (every immediate fits in u64)
+    // takes the fast limb-by-limb path.
+    if (bignum_is_immediate(d)) {
+        uint64_t r = bignum_divmod_small(x, bignum_get_immediate(d));
+        *rem = bignum_from_u64(r);
+        return;
+    }
+    if (bignum_cmp(*x, d) < 0) {          // x < d: quotient 0, remainder x
+        *rem = *x;
+        *x = bignum_zero();
+        return;
+    }
+    // Binary long division (shift-subtract) over the limb arrays: r is the
+    // running remainder, one bit of x is shifted in per step, and the quotient
+    // bit is 1 whenever r >= d. d has >= 2^62 so x is on the heap too.
+    uint64_t di;
+    uint32_t dn, xn;
+    const uint64_t *dl = as_limbs(d, &di, &dn);
+    BigLimbs *xl = bignum_get_ptr(*x);
+    xn = xl->len;
+    BigLimbs *q = limbs_alloc(xn);
+    BigLimbs *r = limbs_alloc(dn + 1);
+    q->len = xn;
+    r->len = dn + 1;
+    memset(q->limbs, 0, xn * sizeof(uint64_t));
+    memset(r->limbs, 0, (dn + 1) * sizeof(uint64_t));
+    for (uint32_t bit = xn * 64; bit-- > 0; ) {
+        // r = (r << 1) | bit_of_x
+        uint64_t carry = (xl->limbs[bit / 64] >> (bit % 64)) & 1;
+        for (uint32_t i = 0; i < r->len; i++) {
+            uint64_t next = r->limbs[i] >> 63;
+            r->limbs[i] = (r->limbs[i] << 1) | carry;
+            carry = next;
+        }
+        if (limbs_cmp(r->limbs, r->len, dl, dn) >= 0) {
+            limbs_sub_inplace(r->limbs, r->len, dl, dn);
+            q->limbs[bit / 64] |= 1ULL << (bit % 64);
+        }
+    }
+    free(xl);
+    *x = limbs_finish(q);
+    *rem = limbs_finish(r);
+}
+
 // ============================================================
 // Comparison
 // ============================================================

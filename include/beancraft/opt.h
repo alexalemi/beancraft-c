@@ -37,6 +37,12 @@ typedef enum {
     IR_OPT_COPY,          // non-destructive copy: dests = [T, D_1..D_m];
                           //   reg[D_i] += reg[REG];  reg[REG] += reg[T];  reg[T] = 0;  goto arg_a
                           //   (the fold of TRANSFER REG->{D...,T} ; TRANSFER T->{REG})
+    IR_OPT_DIVBIN,        // divide by a bin (a register-valued divisor): REG = the dividend R,
+                          //   dests = [P, REM, Q, X_1..X_m] (m >= 0).  With P > 0:
+                          //     Q += R div P;  REM := R mod P;  X_i += R;  P := P - REM - 1;  R := 0;
+                          //     goto arg_a
+                          //   With P == 0 the source loop never terminates, so neither does this
+                          //   (it re-executes itself until the step cap).
 } IrOptOp;
 
 // Extended instruction for optimized IR.
@@ -99,6 +105,14 @@ typedef enum {
                           //   (the classic non-destructive copy: move S out through a temp,
                           //    then move the temp back)  ->  D_i += S;  S += T;  T := 0
                           //   dst_regs = [T, D_1..D_m]
+    PATTERN_DIVBIN,       // "divide by a bin" -- long division of R by the *value* of P:
+                          //   deb REM next self;                    (REM := 0)
+                          //   L: deb P full; deb R exit; inc REM; [inc X_i;] jmp L
+                          //     (take one bean from P and one from R together, counting in REM)
+                          //   full: deb REM q; inc P; jmp full     (P ran dry: pour REM back = refill P)
+                          //   q: inc Q; jmp L                       (... and count one quotient)
+                          //   -> Q += R div P;  REM := R mod P;  X_i += R;  P := P - REM - 1;  R := 0
+                          //   dst_regs = [P, REM, Q, X_1..X_m]
 } PatternType;
 
 // Detected pattern info
@@ -109,7 +123,8 @@ typedef struct {
     uint32_t src_reg;     // source / cleared / dividend / MULADD-counter / tested register
     uint32_t exit_inst;   // TRANSFER/ZERO/MULADD: continuation;  ISZERO: the zero branch
     uint32_t exit_inst2;  // ISZERO: the non-zero branch
-    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: inc/quotient targets; MULADD: [S, T, D_1..D_m]
+    uint32_t dst_regs[IR_OPT_MAX_DESTS];  // TRANSFER/DIVMOD: inc/quotient targets; MULADD: [S, T, D_1..D_m];
+                                          // DIVBIN: [P, REM, Q, X_1..X_m]
     uint32_t dst_count;
     uint32_t div_k;                       // DIVMOD: the divisor
     uint32_t exit_insts[IR_OPT_MAX_DESTS];// DIVMOD: continuation per remainder 0..div_k-1

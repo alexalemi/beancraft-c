@@ -502,8 +502,75 @@ TEST(transfer) {
 // Main
 // ============================================================
 
+// --- bignum_divmod (arbitrary divisor) and bignum_sub ------------------------
+
+static Bignum bn(const char *s) { return bignum_from_string(s); }
+static void expect_str(Bignum x, const char *want) {
+    char *got = bignum_to_string(x);
+    if (strcmp(got, want) != 0) { fprintf(stderr, "\n  got %s, want %s\n", got, want); assert(0); }
+    free(got);
+}
+
+TEST(divmod_small_divisor_path) {
+    Bignum x = bn("123456789012345678901234567890"), r;
+    Bignum d = bignum_from_u64(97);
+    bignum_divmod(&x, d, &r);
+    expect_str(x, "1272750402189130710322005854");   // floor
+    expect_str(r, "52");
+    bignum_free(&x); bignum_free(&r);
+}
+
+TEST(divmod_big_divisor) {
+    Bignum x = bn("123456789012345678901234567890"), r;
+    Bignum d = bn("98765432109876543210987");
+    bignum_divmod(&x, d, &r);
+    expect_str(x, "1249999");
+    expect_str(r, "97640432109764044028877");
+    // q*d + r == x
+    Bignum qd = bignum_mul(x, d);
+    Bignum back = bignum_add(qd, r);
+    expect_str(back, "123456789012345678901234567890");
+    bignum_free(&x); bignum_free(&r); bignum_free(&d); bignum_free(&qd); bignum_free(&back);
+
+    // x < d: quotient 0, remainder x.  d must be left intact.
+    Bignum y = bn("5"), rr;
+    Bignum big = bn("100000000000000000000000000000");
+    bignum_divmod(&y, big, &rr);
+    assert(bignum_is_zero(y));
+    expect_str(rr, "5");
+    expect_str(big, "100000000000000000000000000000");
+    bignum_free(&rr); bignum_free(&big);
+
+    // exact multi-limb division
+    Bignum a = bn("340282366920938463463374607431768211456");   // 2^128
+    Bignum b = bn("18446744073709551616");                       // 2^64
+    Bignum r2;
+    bignum_divmod(&a, b, &r2);
+    expect_str(a, "18446744073709551616");
+    assert(bignum_is_zero(r2));
+    bignum_free(&a); bignum_free(&b);
+}
+
+TEST(sub_saturates) {
+    Bignum a = bignum_from_u64(10), b = bignum_from_u64(3);
+    Bignum c = bignum_sub(a, b);
+    expect_str(c, "7");
+    Bignum z = bignum_sub(b, a);
+    assert(bignum_is_zero(z));
+    Bignum big = bn("340282366920938463463374607431768211456");
+    Bignum one = bignum_from_u64(1);
+    Bignum m = bignum_sub(big, one);
+    expect_str(m, "340282366920938463463374607431768211455");
+    Bignum back = bignum_sub(big, m);
+    expect_str(back, "1");
+    bignum_free(&big); bignum_free(&m);
+}
+
 int main(void) {
     printf("Running bignum tests:\n");
+    RUN(divmod_small_divisor_path);
+    RUN(divmod_big_divisor);
+    RUN(sub_saturates);
 
     RUN(zero);
     RUN(from_u64_small);

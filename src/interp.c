@@ -168,6 +168,32 @@ void interp_step(InterpState *state) {
         state->pc = bignum_is_zero(state->regs[inst->reg]) ? inst->arg_a : inst->arg_b;
         break;
 
+    case IR_OPT_DIVBIN: {
+        // dests = [P, REM, Q, X_1..X_m]: long division of R (= reg) by the
+        // value of P.  Q += R div P;  REM := R mod P;  X_i += R;
+        // P := P - REM - 1;  R := 0.  All five roles are distinct registers
+        // (the optimizer guarantees it). P == 0 never terminates in the source
+        // loop, so spin here (the step cap ends it, exactly as at -O0).
+        const uint32_t *d = &prog->dests[inst->dest_off];
+        Bignum *P = &state->regs[d[0]], *REM = &state->regs[d[1]], *Q = &state->regs[d[2]];
+        Bignum *R = &state->regs[inst->reg];
+        if (bignum_is_zero(*P)) break;                          // pc unchanged: spin
+        for (uint32_t x = 3; x < inst->dest_count; x++)
+            bignum_add_into(&state->regs[d[x]], *R);
+        Bignum r;
+        bignum_divmod(R, *P, &r);                               // R := quotient
+        bignum_add_into(Q, *R);
+        bignum_set_zero(R);
+        Bignum p_left = bignum_sub(*P, r);                      // P - REM - 1  (REM < P, so >= 0)
+        bignum_dec(&p_left);
+        bignum_free(P);
+        *P = p_left;
+        bignum_free(REM);
+        *REM = r;
+        state->pc = inst->arg_a;
+        break;
+    }
+
     case IR_OPT_COPY: {
         // dests[0] = T (the round-trip temp), dests[1..] = D_i. Fold of
         // TRANSFER S->{D...,T} ; TRANSFER T->{S}:  D_i += S; S += T; T := 0.
@@ -203,15 +229,16 @@ void interp_run(InterpState *state, uint64_t max_steps) {
 
 static const char *opt_op_name(IrOptOp op) {
     switch (op) {
-    case IR_OPT_INC:      return "inc";
-    case IR_OPT_DEB:      return "deb";
-    case IR_OPT_END:      return "end";
+    case IR_OPT_INC:      return "give";
+    case IR_OPT_DEB:      return "take";
+    case IR_OPT_END:      return "stop";
     case IR_OPT_ZERO:     return "zero";
     case IR_OPT_TRANSFER: return "transfer";
     case IR_OPT_DIVMOD:   return "divmod";
     case IR_OPT_MULADD:   return "muladd";
     case IR_OPT_ISZERO:   return "iszero";
     case IR_OPT_COPY:     return "copy";
+    case IR_OPT_DIVBIN:   return "divbin";
     }
     return "?";
 }

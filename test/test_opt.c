@@ -536,6 +536,158 @@ TEST(transfer_and_zero_still_fold) {
 }
 
 // ============================================================
+// DIVBIN ("divide by a bin") detection
+// ============================================================
+
+// The idiom: q += R div p; rem := R mod p; Rs += R; p := p - rem - 1; R := 0.
+static const char *DIVBIN_SRC =
+    "      take rem step self\n"
+    "step: take p full\n"
+    "      take R part\n"
+    "      give rem\n"
+    "      give Rs step\n"
+    "full: take rem incq\n"
+    "      give p full\n"
+    "incq: give q step\n"
+    "part:\n";
+
+// Same, with the extra accumulator first and no accumulator at all.
+static const char *DIVBIN_REM_LAST_SRC =
+    "      take rem step self\n"
+    "step: take p full\n"
+    "      take R part\n"
+    "      give Rs\n"
+    "      give rem step\n"
+    "full: take rem incq\n"
+    "      give p full\n"
+    "incq: give q step\n"
+    "part:\n";
+static const char *DIVBIN_BARE_SRC =
+    "      take rem step self\n"
+    "step: take p full\n"
+    "      take R part\n"
+    "      give rem step\n"
+    "full: take rem incq\n"
+    "      give p full\n"
+    "incq: give q step\n"
+    "part:\n";
+
+// Near-misses: no leading `rem := 0` (a stale rem would be poured into p), and
+// the quotient counter aliasing the divisor.
+static const char *DIVBIN_NO_PRECLEAR_SRC =
+    "step: take p full\n"
+    "      take R part\n"
+    "      give rem step\n"
+    "full: take rem incq\n"
+    "      give p full\n"
+    "incq: give q step\n"
+    "part:\n";
+static const char *DIVBIN_Q_IS_P_SRC =
+    "      take rem step self\n"
+    "step: take p full\n"
+    "      take R part\n"
+    "      give rem step\n"
+    "full: take rem incq\n"
+    "      give p full\n"
+    "incq: give p step\n"
+    "part:\n";
+
+TEST(divbin_fires_on_divide_by_bin_shape) {
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+    IrProgram *prog = lower(arena, strings, DIVBIN_SRC);
+
+    Pattern p = ir_detect_pattern(prog, 0);
+    assert(p.type == PATTERN_DIVBIN);
+    assert(strcmp(prog->reg_names[p.src_reg]->data, "R") == 0);
+    assert(p.dst_count == 4);   // [p, rem, q, Rs]
+    assert(strcmp(prog->reg_names[p.dst_regs[0]]->data, "p") == 0);
+    assert(strcmp(prog->reg_names[p.dst_regs[1]]->data, "rem") == 0);
+    assert(strcmp(prog->reg_names[p.dst_regs[2]]->data, "q") == 0);
+    assert(strcmp(prog->reg_names[p.dst_regs[3]]->data, "Rs") == 0);
+    assert(p.exit_inst == 8);   // `part:` -- the labelled no-op after the loop nest
+
+    IrOptProgram *opt = ir_optimize(arena, prog, OPT_LOOPS);
+    assert(count_op(opt, IR_OPT_DIVBIN) == 1);
+    assert(opt->inst_count == 2);   // DIVBIN + STOP: the whole 8-instruction loop nest folded
+
+    // The accumulator may come before rem in the run, and may be absent.
+    p = ir_detect_pattern(lower(arena, strings, DIVBIN_REM_LAST_SRC), 0);
+    assert(p.type == PATTERN_DIVBIN && p.dst_count == 4);
+    assert(strcmp(prog->reg_names[p.dst_regs[3]]->data, "Rs") == 0);
+    p = ir_detect_pattern(lower(arena, strings, DIVBIN_BARE_SRC), 0);
+    assert(p.type == PATTERN_DIVBIN && p.dst_count == 3);
+    arena_free(arena);
+}
+
+TEST(divbin_declines_near_misses) {
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+
+    IrOptProgram *a = ir_optimize(arena, lower(arena, strings, DIVBIN_NO_PRECLEAR_SRC), OPT_LOOPS);
+    assert(count_op(a, IR_OPT_DIVBIN) == 0);
+    IrOptProgram *b = ir_optimize(arena, lower(arena, strings, DIVBIN_Q_IS_P_SRC), OPT_LOOPS);
+    assert(count_op(b, IR_OPT_DIVBIN) == 0);
+    // Graceful degradation: the refill loop is still a TRANSFER, the prologue a ZERO.
+    assert(count_op(b, IR_OPT_TRANSFER) == 1);
+    assert(count_op(b, IR_OPT_ZERO) == 1);
+
+    // Never at -O0.
+    IrOptProgram *c = ir_optimize(arena, lower(arena, strings, DIVBIN_SRC), OPT_NONE);
+    assert(count_op(c, IR_OPT_DIVBIN) == 0);
+    arena_free(arena);
+}
+
+TEST(divbin_matches_unoptimized) {
+    static const char *inits[] = { "R", "p", "q", "Rs", "rem" };
+    static const char *check[] = { "R", "p", "q", "Rs", "rem" };
+    struct { uint64_t r, p, q0, rs0, rem0; } cases[] = {
+        { 17, 5, 0, 0, 0 },   // q 3, rem 2
+        { 20, 5, 0, 0, 0 },   // exact: rem 0, p := 4
+        { 0, 3, 0, 0, 0 },    // nothing to divide
+        { 7, 1, 0, 0, 0 },    // p == 1: rem always 0
+        { 4, 9, 0, 0, 0 },    // R < p: q 0, rem R
+        { 100, 7, 3, 2, 9 },  // accumulates into q and Rs; a stale rem is wiped
+        { 1, 1, 0, 0, 0 },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        uint64_t v[5] = { cases[i].r, cases[i].p, cases[i].q0, cases[i].rs0, cases[i].rem0 };
+        assert_opt_agrees(DIVBIN_SRC, inits, v, 5, check, 5);
+        assert_opt_agrees(DIVBIN_REM_LAST_SRC, inits, v, 5, check, 5);
+        static const char *bare[] = { "R", "p", "q", "rem" };   // no Rs in that variant
+        uint64_t vb[4] = { cases[i].r, cases[i].p, cases[i].q0, cases[i].rem0 };
+        assert_opt_agrees(DIVBIN_BARE_SRC, bare, vb, 4, bare, 4);
+    }
+    // Closed form spot check.
+    uint64_t v[5] = { 100, 7, 3, 2, 9 }, out[5];
+    run_with(DIVBIN_SRC, OPT_LOOPS, inits, v, 5, check, out, 5);
+    assert(out[0] == 0);        // R
+    assert(out[1] == 7 - 2 - 1);// p := p - rem - 1
+    assert(out[2] == 3 + 14);   // q += 100 div 7
+    assert(out[3] == 2 + 100);  // Rs += R
+    assert(out[4] == 2);        // rem := 100 mod 7
+}
+
+TEST(divbin_zero_divisor_never_halts) {
+    // With p == 0 the source loop spins forever (q++ each round); the fold
+    // must not "finish" either.
+    Arena *arena = arena_new(1 << 16);
+    StrPool *strings = strpool_new(arena);
+    IrProgram *prog = lower(arena, strings, DIVBIN_SRC);
+    IrOptProgram *opt = ir_optimize(arena, prog, OPT_LOOPS);
+    InterpState *st = interp_new(arena, opt);
+    interp_init_regs(st);
+    interp_set_reg(st, "R", 5);
+    interp_run(st, 1000);
+    assert(!st->halted);
+    assert(st->steps == 1000);
+    uint64_t r;
+    assert(bignum_to_u64(interp_get_reg(st, "R"), &r) && r == 5);   // untouched
+    interp_cleanup(st);
+    arena_free(arena);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -563,6 +715,11 @@ int main(void) {
     RUN(copy_with_external_entry_does_not_fuse);
 
     RUN(transfer_and_zero_still_fold);
+
+    RUN(divbin_fires_on_divide_by_bin_shape);
+    RUN(divbin_declines_near_misses);
+    RUN(divbin_matches_unoptimized);
+    RUN(divbin_zero_divisor_never_halts);
 
     printf("\nAll optimizer tests passed!\n");
     return 0;

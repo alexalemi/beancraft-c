@@ -116,6 +116,15 @@ bool bignum_add_into(Bignum *dst, Bignum src);
 // Returns the remainder (always < k, hence fits in u64).
 uint64_t bignum_divmod_small(Bignum *x, uint64_t k);
 
+// Divide x by an arbitrary-precision d (d must be > 0) in place: x becomes
+// floor(x / d) and *rem is set to x mod d (a fresh bignum the caller frees).
+// Does NOT modify d.
+void bignum_divmod(Bignum *x, Bignum d, Bignum *rem);
+
+// Saturating subtract: returns a - b if a >= b, else 0 (allocates new bignum).
+// Does NOT modify a or b.
+Bignum bignum_sub(Bignum a, Bignum b);
+
 // Set to zero (frees heap if necessary)
 void bignum_set_zero(Bignum *x);
 

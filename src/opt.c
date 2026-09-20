@@ -290,8 +290,96 @@ static Pattern try_upgrade_to_copy(const IrProgram *prog, Pattern first) {
     return p;
 }
 
+// DIVBIN: long division of R by the *value* of another register P ("divide by
+// a bin"). The idiom takes a bean from P and a bean from R together, counting
+// each pair in REM; when P runs dry a whole P was subtracted, so REM is poured
+// back into P (which both refills the divisor and re-zeroes REM) and Q counts
+// one; when R runs dry first, REM holds R mod P. Optional extra accumulators
+// X_i in the lockstep run receive every bean taken from R, i.e. X_i += R.
+//   [s]   deb REM ? s+1 : s          (REM := 0 -- required: a stale REM would be
+//                                     poured into P on the first refill)
+//   [s+1] deb P   ? full : s+2
+//   [s+2] deb R   ? exit : s+3
+//   [s+3 ..] inc REM / inc X_i (any order, each once) ... last -> s+1
+//   [full]   deb REM ? q : full+1
+//   [full+1] inc P -> full
+//   [q]      inc Q -> s+1
+//   ->  Q += R div P;  REM := R mod P;  X_i += R;  P := P - REM - 1;  R := 0;  goto exit
+// (P's final value is what the lockstep leaves: the deb P that found R empty
+//  had already taken one bean. With P == 0 the loop never terminates.)
+static Pattern detect_divbin_pattern(const IrProgram *prog, uint32_t start) {
+    Pattern p = { .type = PATTERN_NONE };
+
+    // [s] ZERO REM
+    if (!is_deb(prog, start)) return p;
+    const IrInst *zrem = &prog->insts[start];
+    if (zrem->arg_b != start || zrem->arg_a != start + 1) return p;
+    uint32_t REM = zrem->reg;
+
+    // [s+1] deb P ? full : s+2
+    if (!is_deb(prog, start + 1)) return p;
+    const IrInst *deb_p = &prog->insts[start + 1];
+    if (deb_p->arg_b != start + 2) return p;
+    uint32_t P = deb_p->reg;
+    uint32_t full = deb_p->arg_a;
+
+    // [s+2] deb R ? exit : s+3
+    if (!is_deb(prog, start + 2)) return p;
+    const IrInst *deb_r = &prog->insts[start + 2];
+    if (deb_r->arg_b != start + 3) return p;
+    uint32_t R = deb_r->reg;
+    uint32_t exit_inst = deb_r->arg_a;
+
+    // [s+3 ..] the lockstep inc run, looping back to deb P; REM exactly once.
+    uint32_t regs[IR_OPT_MAX_DESTS];
+    uint32_t n = collect_inc_run(prog, start + 3, start + 1, R, regs);
+    if (n == 0) return p;
+    if (full != start + 3 + n) return p;        // the refill must follow the run directly
+    uint32_t rem_hits = 0;
+    for (uint32_t i = 0; i < n; i++) rem_hits += (regs[i] == REM);
+    if (rem_hits != 1) return p;
+
+    // [full] deb REM ? q : full+1 ;  [full+1] inc P -> full ;  [q] inc Q -> s+1
+    if (!is_deb(prog, full) || !is_inc(prog, full + 1) || !is_inc(prog, full + 2)) return p;
+    const IrInst *refill = &prog->insts[full];
+    if (refill->reg != REM || refill->arg_b != full + 1 || refill->arg_a != full + 2) return p;
+    if (prog->insts[full + 1].reg != P || prog->insts[full + 1].arg_a != full) return p;
+    if (prog->insts[full + 2].arg_a != start + 1) return p;
+    uint32_t Q = prog->insts[full + 2].reg;
+    uint32_t end_inst = full + 3;
+
+    // {R, P, REM, Q, X_i} pairwise distinct (collect_inc_run already kept R out
+    // of the run). Pack [P, REM, Q, X_1..X_m].
+    uint32_t all[IR_OPT_MAX_DESTS + 1];
+    uint32_t na = 0;
+    all[na++] = R; all[na++] = P; all[na++] = Q;
+    for (uint32_t i = 0; i < n; i++) all[na++] = regs[i];   // includes REM once
+    for (uint32_t a = 0; a < na; a++)
+        for (uint32_t b = a + 1; b < na; b++) if (all[a] == all[b]) return p;
+    if (n + 2 > IR_OPT_MAX_DESTS) return p;
+
+    if (!body_is_private(prog, start, end_inst, &exit_inst, 1)) return p;
+
+    p.type = PATTERN_DIVBIN;
+    p.start_inst = start;
+    p.end_inst = end_inst;
+    p.src_reg = R;
+    p.exit_inst = exit_inst;
+    p.dst_regs[0] = P;
+    p.dst_regs[1] = REM;
+    p.dst_regs[2] = Q;
+    p.dst_count = 3;
+    for (uint32_t i = 0; i < n; i++)
+        if (regs[i] != REM) p.dst_regs[p.dst_count++] = regs[i];
+    return p;
+}
+
 Pattern ir_detect_pattern(const IrProgram *prog, uint32_t start) {
-    Pattern p = detect_muladd_pattern(prog, start);
+    // DIVBIN begins with a ZERO-shaped instruction, so it must be tried before
+    // the plain ZERO fold claims that first instruction.
+    Pattern p = detect_divbin_pattern(prog, start);
+    if (p.type != PATTERN_NONE) return p;
+    p = detect_muladd_pattern(prog, start);
     if (p.type != PATTERN_NONE) return p;
     p = detect_transfer_pattern(prog, start);
     if (p.type != PATTERN_NONE) return try_upgrade_to_copy(prog, p);
@@ -361,6 +449,7 @@ static void ir_thread_jumps(IrOptProgram *opt, uint32_t nil_reg) {
         case IR_OPT_TRANSFER:
         case IR_OPT_MULADD:
         case IR_OPT_COPY:
+        case IR_OPT_DIVBIN:
             inst->arg_a = opt_thread_target(opt, nil_reg, inst->arg_a);
             break;
         case IR_OPT_DIVMOD: {
@@ -400,6 +489,7 @@ static uint32_t opt_targets(const IrOptProgram *opt, uint32_t i, uint32_t *out) 
     case IR_OPT_TRANSFER:
     case IR_OPT_MULADD:
     case IR_OPT_COPY:
+    case IR_OPT_DIVBIN:
         out[n++] = in->arg_a;
         break;
     case IR_OPT_DIVMOD: {
@@ -455,6 +545,7 @@ static void ir_remove_dead(IrOptProgram *opt) {
         case IR_OPT_TRANSFER:
         case IR_OPT_MULADD:
         case IR_OPT_COPY:
+        case IR_OPT_DIVBIN:
             if (inst->arg_a < opt->inst_count) inst->arg_a = map[inst->arg_a];
             break;
         case IR_OPT_DIVMOD: {
@@ -622,6 +713,15 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
                 for (uint32_t d = 0; d < p->dst_count; d++)
                     opt->dests[opt->dest_total++] = p->dst_regs[d];
                 break;
+            case PATTERN_DIVBIN:
+                out.op = IR_OPT_DIVBIN;
+                out.reg = p->src_reg;              // the dividend R
+                out.arg_a = p->exit_inst;          // remapped in pass 3
+                out.dest_off = opt->dest_total;
+                out.dest_count = p->dst_count;     // [P, REM, Q, X_1..X_m]
+                for (uint32_t d = 0; d < p->dst_count; d++)
+                    opt->dests[opt->dest_total++] = p->dst_regs[d];
+                break;
             case PATTERN_ISZERO:
                 out.op = IR_OPT_ISZERO;
                 out.reg = p->src_reg;
@@ -652,6 +752,7 @@ IrOptProgram *ir_optimize(Arena *arena, const IrProgram *prog, OptLevel level) {
         case IR_OPT_TRANSFER:
         case IR_OPT_MULADD:   // dests hold register indices, not instructions; only arg_a is remapped
         case IR_OPT_COPY:
+        case IR_OPT_DIVBIN:
             if (inst->arg_a < prog->inst_count) inst->arg_a = inst_map[inst->arg_a];
             break;
         case IR_OPT_DIVMOD: {
@@ -690,14 +791,14 @@ void ir_opt_print(const IrOptProgram *prog) {
         printf("%3u: ", i);
         switch (inst->op) {
         case IR_OPT_INC:
-            printf("INC %s -> %u\n", prog->reg_names[inst->reg]->data, inst->arg_a);
+            printf("GIVE %s -> %u\n", prog->reg_names[inst->reg]->data, inst->arg_a);
             break;
         case IR_OPT_DEB:
-            printf("DEB %s -> zero:%u nonzero:%u\n",
+            printf("TAKE %s -> zero:%u nonzero:%u\n",
                    prog->reg_names[inst->reg]->data, inst->arg_a, inst->arg_b);
             break;
         case IR_OPT_END:
-            printf("END\n");
+            printf("STOP\n");
             break;
         case IR_OPT_ZERO:
             printf("ZERO %s -> %u\n", prog->reg_names[inst->reg]->data, inst->arg_a);
@@ -734,6 +835,17 @@ void ir_opt_print(const IrOptProgram *prog) {
             printf("IS_ZERO %s -> zero:%u nonzero:%u\n",
                    prog->reg_names[inst->reg]->data, inst->arg_a, inst->arg_b);
             break;
+        case IR_OPT_DIVBIN: {
+            const uint32_t *d = &prog->dests[inst->dest_off];
+            printf("DIVBIN %s / %s -> quot %s, rem %s",
+                   prog->reg_names[inst->reg]->data, prog->reg_names[d[0]]->data,
+                   prog->reg_names[d[2]]->data, prog->reg_names[d[1]]->data);
+            for (uint32_t x = 3; x < inst->dest_count; x++)
+                printf("%s%s", x > 3 ? ", " : ", also {", prog->reg_names[d[x]]->data);
+            if (inst->dest_count > 3) printf("} += %s", prog->reg_names[inst->reg]->data);
+            printf(", then %u\n", inst->arg_a);
+            break;
+        }
         case IR_OPT_COPY:
             printf("COPY %s -> {", prog->reg_names[inst->reg]->data);
             for (uint32_t d = 1; d < inst->dest_count; d++)
