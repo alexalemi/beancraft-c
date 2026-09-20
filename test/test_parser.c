@@ -260,9 +260,9 @@ TEST(long_form_instructions) {
     StrPool *strings = strpool_new(arena);
 
     const char *source =
-        "inc A next\n"
-        "deb B done prev\n"
-        "end\n";
+        "give A next\n"
+        "take B done prev\n"
+        "stop\n";
 
     BcResult result = parse(arena, strings, source, strlen(source), "test.bc");
     assert(result.ok);
@@ -273,6 +273,25 @@ TEST(long_form_instructions) {
     assert(ast->nodes[1].kind == AST_DEB);
     assert(ast->nodes[2].kind == AST_END);
 
+    arena_free(arena);
+}
+
+TEST(legacy_instruction_words_still_parse) {
+    Arena *arena = arena_new(4096);
+    StrPool *strings = strpool_new(arena);
+
+    // inc / deb / end are aliases for give / take / stop.
+    const char *source =
+        "inc A next\n"
+        "deb B done prev\n"
+        "end\n";
+    BcResult result = parse(arena, strings, source, strlen(source), "test.bc");
+    assert(result.ok);
+    Ast *ast = result.value;
+    assert(ast->node_count == 3);
+    assert(ast->nodes[0].kind == AST_INC);
+    assert(ast->nodes[1].kind == AST_DEB);
+    assert(ast->nodes[2].kind == AST_END);
     arena_free(arena);
 }
 
@@ -325,6 +344,7 @@ int main(void) {
     RUN(use_statement);
     RUN(use_with_scope);
     RUN(long_form_instructions);
+    RUN(legacy_instruction_words_still_parse);
     RUN(error_missing_register);
     RUN(error_missing_jump);
 

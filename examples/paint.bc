@@ -21,10 +21,10 @@ func addn N R {                    # R += N   (N is a value argument, consumed)
 
 addn 15 screen/color               # ANSI white
 
-loop: inc screen/flush             # blit, pump input
-      deb mouse/event check onMouse  # mouse moved/clicked?  no -> check, yes -> onMouse
+loop: give screen/flush             # blit, pump input
+      take mouse/event check onMouse  # mouse moved/clicked?  no -> check, yes -> onMouse
 onMouse: copy mouse/x screen/x
          copy mouse/y screen/y
-         inc screen/plot           # draw a white pixel at the cursor
-check: deb kbd/event loop quit     # key pressed?  no -> loop, yes -> quit
+         give screen/plot           # draw a white pixel at the cursor
+check: take kbd/event loop quit     # key pressed?  no -> loop, yes -> quit
 quit:

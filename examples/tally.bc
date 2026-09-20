@@ -1,0 +1,164 @@
+# tally.bc -- a universal register machine in 62 moves.
+#
+# It runs any beancraft program handed to it as two numbers:
+#
+#   P   the program, written as a string of TALLIES.  A field holding n is n
+#       one-bits followed by a zero; fields are laid end to end, least
+#       significant bit first, so the machine reads them by halving P.
+#       An instruction is a run of fields:
+#           give r -> a        2p, a           (p = the prime that stands for r)
+#           take r -> a / b    2p+1, a, b
+#           stop               0               (the empty tally)
+#       A jump target is the FIELD offset of the instruction it names.
+#       Reading past the end of P yields empty tallies forever -- i.e. `stop`.
+#
+#   R   the bank of registers, as ONE number:  R = 2^v0 * 3^v1 * 5^v2 * ...
+#       Each register is a prime; its value is that prime's exponent.
+#       `give r` multiplies R by p.  `take r` asks whether p divides R:
+#       if it does, R := R / p (a bean came out); if it doesn't, the bin was
+#       empty.  The empty bank is R = 1, so R must never start at 0.
+#
+# The instruction says which prime it wants, so the machine never has to
+# compute primes; it only ever multiplies by, or divides by, a number it just
+# read.  That division -- "divide by a bin" -- is the DIVBIN loop below, which
+# the optimizer folds to one bignum op.  Run it with -O; without -O a single
+# halving of P is exponential in P's bit length.
+#
+#   beancraft --emit-tally file.bc [REG=VALUE...]   prints P=... R=...
+#   beancraft examples/tally.bc -O P=<...> R=<...>
+#
+# The machine proper is the 61 instructions from `step` to `s3`, plus the
+# `stop` they jump to: 62 moves.  What follows `unpack:` is a convenience
+# that factors the first three primes back out of R into out0..out2 so the
+# answer is readable; it is not part of the machine.
+#
+# Registers:  P R PC          the program, the bank, the program counter
+#             Pw t P2 X s     a working copy of P, copy temp, halving temp,
+#                             the field just read, which field of the
+#                             instruction we are on (0: kind/prime, 1: a give's
+#                             target, 2: a take's first target, 3: its second)
+#             p M T           the prime, product temp, multiply temp
+#             rem Rs q        DIVBIN's remainder, saved dividend, quotient
+
+# ---- fetch: Pw := P (a fresh, consumable copy of the program) ---------------
+step:    take Pw cp self           # Pw := 0
+cp:      take P cp2                # P -> {Pw, t}
+         give Pw
+         give t cp
+cp2:     take t rd                 # t -> P            (P is intact again)
+         give P cp2
+
+# ---- read the next tally field into X -------------------------------------
+rd:      take Pw z                 # low bit of Pw: 0 ends the tally,
+         take Pw o                 #                1 is one more mark
+         give P2 rd                # P2 := Pw div 2  (the bits above it)
+o:       take P2 bump              # put the rest of the program back in Pw
+         give Pw o
+bump:    give X rd                 # count the mark, read on
+z:       take P2 real
+         give Pw z
+real:    take s isP                # s == 0: X is the kind/prime field
+         take s isGiveA            # s == 1: X is a give's target
+         take s isTakeA            # s == 2: X is a take's first target
+                                   # s == 3: X is a take's second target -- do the take
+
+# ---- take:  is R divisible by p?  (DIVBIN: divide by a bin) -----------------
+isTakeB: take rem dv self          # rem := 0
+dv:      take p full               # a bean from p and a bean from R together,
+         take R part               #   ...
+         give rem                  #   ... counted in rem
+         give Rs dv                #   ... and saved in Rs, to put R back later
+full:    take rem incq             # p ran dry: a whole p came out of R;
+         give p full               #   pour rem back to refill p ...
+incq:    give q dv                 #   ... and count one
+part:    take p clrp self          # R ran dry: rem = R mod p.  p := 0 (junk)
+clrp:    take rem isdiv            # rem == 0 -> divisible
+notdiv:  take Rs nd2               # not divisible: R := Rs (R put back)
+         give R notdiv
+nd2:     take q nd3 self           # q := 0
+nd3:     take X step self          # drop b; PC = a already            -> next step
+isdiv:   take q dv2                # divisible: R := q  (= R / p)
+         give R isdiv
+dv2:     take Rs dv3 self          # Rs := 0
+dv3:     take PC dv4 self          # drop a
+dv4:     take X step               # PC := b                            -> next step
+         give PC dv4
+
+# ---- decode:  X = 2p + kind ------------------------------------------------
+isP:     take PC isP2              # fields still to skip?  PC--, drop this one ...
+         take X rd self            #   ... X := 0, and read the next field
+isP2:    take X giveK              # even -> give;  odd -> take;   p := X div 2
+         take X takeK
+         give p isP2
+
+# ---- give:  R := p * R ------------------------------------------------------
+giveK:   take p unpack             # p == 0: the empty tally is `stop`.  else p := p-1
+m0:      take p mdone              # M := (p-1) * R        (R kept: MULADD)
+m1:      take R m2
+         give M
+         give T m1
+m2:      take T m0
+         give R m2
+mdone:   take M setS1              # R += M   -> R := p * R
+         give R mdone
+setS1:   give s rd                 # s := 1; read the target
+isGiveA: take X step               # PC := a                            -> next step
+         give PC isGiveA
+
+# ---- take: read its two targets first ---------------------------------------
+takeK:   give s                    # s := 2; read the first target
+         give s rd
+isTakeA: take X s3                 # PC := a
+         give PC isTakeA
+s3:      give s                    # s := 3; read the second target
+         give s
+         give s rd
+
+# =============================================================================
+# Not part of the machine: unpack the first three registers so the result
+# prints readably.  out0, out1, out2 := the exponents of 2, 3, 5 in R.
+# (R is left with those factors divided out.)
+# =============================================================================
+unpack:  take R d2                 # R = 2Q + r, r in {0, 1}
+         take R n2
+         give Q unpack
+d2:      take Q i2                 # r == 0: R := Q, count one
+         give R d2
+i2:      give out0 unpack
+n2:      give R r2                 # r == 1: R := 2Q + 1
+r2:      take Q u3
+         give R
+         give R r2
+u3:      take R d3                 # R = 3Q + r
+         take R n3a
+         take R n3b
+         give Q u3
+d3:      take Q i3
+         give R d3
+i3:      give out1 u3
+n3b:     give R n3a
+n3a:     give R r3
+r3:      take Q u5
+         give R
+         give R
+         give R r3
+u5:      take R d5                 # R = 5Q + r
+         take R n5a
+         take R n5b
+         take R n5c
+         take R n5d
+         give Q u5
+d5:      take Q i5
+         give R d5
+i5:      give out2 u5
+n5d:     give R n5c
+n5c:     give R n5b
+n5b:     give R n5a
+n5a:     give R r5
+r5:      take Q fin
+         give R
+         give R
+         give R
+         give R
+         give R r5
+fin:

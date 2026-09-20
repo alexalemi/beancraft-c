@@ -18,13 +18,13 @@ func cell PX PY {                                  # paint cell (PX, PY) alive (
   copy PY screen/y
   clear screen/color
   + screen/color
-  inc screen/plot
+  give screen/plot
 }
 
 func nbr NX NY CNT {                                # CNT++ if cell (NX, NY) is alive now
   copy NX screen/x
   copy NY screen/y
-  inc screen/sample
+  give screen/sample
   copy screen/pixel pp
   bit0 pp a
   - a nd nyes
@@ -33,7 +33,7 @@ nd:
 }
 
 # --- set up: blank board, "alive" (colour 1) rendered as white ---
-inc screen/clear
+give screen/clear
 clear palette/index
 + palette/index                                    # palette/index := 1
 clear palette/r
@@ -42,7 +42,7 @@ clear palette/g
 addn 255 palette/g
 clear palette/b
 addn 255 palette/b
-inc palette/set                                    # palette[1] := white
+give palette/set                                    # palette[1] := white
 
 # --- seed: two R-pentominoes (.XX / XX. / .X.) ---
 cell 19 18
@@ -79,7 +79,7 @@ p1xLoop: - xn p1xRowDone p1xBody
 p1xBody:
   copy x screen/x                                  # read this cell's colour / alive bit
   copy y screen/y
-  inc screen/sample
+  give screen/sample
   copy screen/pixel cur
   copy cur ctmp
   bit0 ctmp alive
@@ -105,7 +105,7 @@ doSet:
   copy y screen/y
   copy cur screen/color
   addn 2 screen/color                              # set bit 1
-  inc screen/plot
+  give screen/plot
 p1adv:
   + x
   + xm1
@@ -132,16 +132,16 @@ p2xLoop: - xn p2xRowDone p2xBody
 p2xBody:
   copy x screen/x
   copy y screen/y
-  inc screen/sample
+  give screen/sample
   half screen/pixel
   copy screen/pixel screen/color
-  inc screen/plot
+  give screen/plot
   + x
   - z p2xLoop
 p2xRowDone:
   + y
   - z p2yLoop
 done2:
-  inc screen/flush
-  deb kbd/event gen quit
+  give screen/flush
+  take kbd/event gen quit
 quit:

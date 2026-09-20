@@ -91,7 +91,7 @@ func note FREQ MS {                                # queue a square-wave tone: F
   addn FREQ audio/freq
   clear audio/duration
   addn MS audio/duration
-  inc audio/play
+  give audio/play
 }
 
 func iseq A B R {                                  # R := 1 if A == B else 0   (A, B consumed)

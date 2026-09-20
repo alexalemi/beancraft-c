@@ -64,19 +64,19 @@ void ast_print(const Ast *ast) {
 
         switch (node->kind) {
         case AST_INC:
-            printf("inc %s ", node->inc.reg->data);
+            printf("give %s ", node->inc.reg->data);
             print_jump(&node->inc.next);
             break;
 
         case AST_DEB:
-            printf("deb %s ", node->deb.reg->data);
+            printf("take %s ", node->deb.reg->data);
             print_jump(&node->deb.jump);
             printf(" ");
             print_jump(&node->deb.next);
             break;
 
         case AST_END:
-            printf("end");
+            printf("stop");
             break;
 
         case AST_USE:

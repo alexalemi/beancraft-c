@@ -1,78 +1,78 @@
 # Compute day of week - simplified with initial values
 
 # Clear outputs
-deb Out next self
-deb tmp next self  
-deb tmp2 next self
+take Out next self
+take tmp next self  
+take tmp2 next self
 
 # Copy month for processing
-copyMonth: deb Month refillMonth
-inc tmp
-inc tmp2 copyMonth
-refillMonth: deb tmp2 checkMonth
-inc Month prev
+copyMonth: take Month refillMonth
+give tmp
+give tmp2 copyMonth
+refillMonth: take tmp2 checkMonth
+give Month prev
 
 # Check if month < 3 (subtract 3 from tmp)
-checkMonth: deb tmp decYear
-deb tmp decYear  
-deb tmp decYear terms
+checkMonth: take tmp decYear
+take tmp decYear  
+take tmp decYear terms
 
 # If month < 3, decrement year
-decYear: deb Year terms terms
+decYear: take Year terms terms
 
 # Start building sum with year
-terms: deb sum y self
+terms: take sum y self
 y: use "copy" From=Year To=sum tmp=tmp2
 
 # Add year/4 (set up divisor=4 and divide)  
 leap: use "copy" From=4 To=four
       use "copy" From=Year To=tmp tmp=tmp2
       # Manually divide by 4 (repeated subtraction)
-      leapLoop: deb tmp leapDone
-                deb four leapRestore
-                inc sum leapLoop
-      leapRestore: inc four leapLoop
-      leapDone: deb nil continue continue
+      leapLoop: take tmp leapDone
+                take four leapRestore
+                give sum leapLoop
+      leapRestore: give four leapLoop
+      leapDone: take nil continue continue
 
 # For now, skip the complex 100/400 year corrections and go to lookup
-continue: deb nil lookupStart lookupStart
+continue: take nil lookupStart lookupStart
 
-lookupStart: deb Month halt
-deb Month day
-deb Month lookup3  
-deb Month lookup2
-deb Month lookup5
-deb Month day
-deb Month lookup3
-deb Month lookup5
-deb Month lookup1
-deb Month lookup4
-deb Month lookup6
-deb Month lookup2
-deb Month lookup4
+lookupStart: take Month halt
+take Month day
+take Month lookup3  
+take Month lookup2
+take Month lookup5
+take Month day
+take Month lookup3
+take Month lookup5
+take Month lookup1
+take Month lookup4
+take Month lookup6
+take Month lookup2
+take Month lookup4
 
-lookup6: inc sum
-lookup5: inc sum
-lookup4: inc sum  
-lookup3: inc sum
-lookup2: inc sum
-lookup1: inc sum
+lookup6: give sum
+lookup5: give sum
+lookup4: give sum  
+lookup3: give sum
+lookup2: give sum
+lookup1: give sum
 
 day: use "copy" From=Day To=sum tmp=tmp2
 
 # Modulo 7
-modout: deb sum out0
-deb sum out1
-deb sum out2
-deb sum out3  
-deb sum out4
-deb sum out5
-deb sum out6 modout
+modout: take sum out0
+take sum out1
+take sum out2
+take sum out3  
+take sum out4
+take sum out5
+take sum out6 modout
 
-out6: inc Out
-out5: inc Out
-out4: inc Out
-out3: inc Out
-out2: inc Out  
-out1: inc Out
-out0: end
+out6: give Out
+out5: give Out
+out4: give Out
+out3: give Out
+out2: give Out  
+out1: give Out
+out0: stop

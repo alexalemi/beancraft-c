@@ -1,24 +1,24 @@
 # Day of week with constants set using initial values
-# This shows how much cleaner it is vs hundreds of manual inc statements
+# This shows how much cleaner it is vs hundreds of manual give statements
 
-deb Out next self
-deb tmp next self
-deb tmp2 next self
+take Out next self
+take tmp next self
+take tmp2 next self
 
-copyMonth: deb Month refillMonth
-inc tmp
-inc tmp2 copyMonth
-refillMonth: deb tmp2 checkMonth
-inc Month prev
+copyMonth: take Month refillMonth
+give tmp
+give tmp2 copyMonth
+refillMonth: take tmp2 checkMonth
+give Month prev
 
 # Check if m < 3
-checkMonth: deb tmp decYear
-deb tmp decYear
-deb tmp decYear terms
+checkMonth: take tmp decYear
+take tmp decYear
+take tmp decYear terms
 
-decYear: deb Year terms terms
+decYear: take Year terms terms
 
-terms: deb sum y self
+terms: take sum y self
 # +y
 y: use "copy" From=Year To=sum tmp=tmp2
 
@@ -26,62 +26,62 @@ y: use "copy" From=Year To=sum tmp=tmp2
 # Set up 4 and do manual division by 4
 use "copy" From=4 To=divisor
 leap: use "copy" From=Year To=tmp tmp=tmp2
-leapDiv: deb tmp centuryStart
-         deb divisor leapRestore
-         inc sum leapDiv
-leapRestore: inc divisor leapDiv
+leapDiv: take tmp centuryStart
+         take divisor leapRestore
+         give sum leapDiv
+leapRestore: give divisor leapDiv
 
 # Set up 100 for century calculation  
 centuryStart: use "copy" From=100 To=divisor
               use "copy" From=Year To=tmp tmp=tmp2
-century: deb tmp FourhundredStart
-         deb divisor centRestore
-         deb sum halt century
-centRestore: inc divisor century
+century: take tmp FourhundredStart
+         take divisor centRestore
+         take sum halt century
+centRestore: give divisor century
 
 # Set up 400 for four hundred year correction
 FourhundredStart: use "copy" From=400 To=divisor
                   use "copy" From=Year To=tmp tmp=tmp2
-fourhundred: deb tmp lookupStart
-             deb divisor fourRestore  
-             inc sum fourhundred
-fourRestore: inc divisor fourhundred
+fourhundred: take tmp lookupStart
+             take divisor fourRestore  
+             give sum fourhundred
+fourRestore: give divisor fourhundred
 
-lookupStart: deb Month halt
-deb Month day
-deb Month lookup3
-deb Month lookup2
-deb Month lookup5
-deb Month day
-deb Month lookup3
-deb Month lookup5
-deb Month lookup1
-deb Month lookup4
-deb Month lookup6
-deb Month lookup2
-deb Month lookup4
+lookupStart: take Month halt
+take Month day
+take Month lookup3
+take Month lookup2
+take Month lookup5
+take Month day
+take Month lookup3
+take Month lookup5
+take Month lookup1
+take Month lookup4
+take Month lookup6
+take Month lookup2
+take Month lookup4
 
-lookup6: inc sum
-lookup5: inc sum
-lookup4: inc sum
-lookup3: inc sum
-lookup2: inc sum
-lookup1: inc sum
+lookup6: give sum
+lookup5: give sum
+lookup4: give sum
+lookup3: give sum
+lookup2: give sum
+lookup1: give sum
 
 day: use "copy" From=Day To=sum tmp=tmp2
 
-modout: deb sum out0
-deb sum out1
-deb sum out2
-deb sum out3
-deb sum out4
-deb sum out5
-deb sum out6 modout
+modout: take sum out0
+take sum out1
+take sum out2
+take sum out3
+take sum out4
+take sum out5
+take sum out6 modout
 
-out6: inc Out
-out5: inc Out
-out4: inc Out
-out3: inc Out
-out2: inc Out
-out1: inc Out
-out0: end
+out6: give Out
+out5: give Out
+out4: give Out
+out3: give Out
+out2: give Out
+out1: give Out
+out0: stop

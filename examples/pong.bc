@@ -10,7 +10,7 @@
 #
 # Beancraft has no comparisons, so collision is a counter-machine trick: the ball
 # carries "mirror" coordinates bxright = W-1-bx and byright = H-1-by, kept in sync
-# with bx/by, so the wall bounces are just `deb` against the mirror -- no compare.
+# with bx/by, so the wall bounces are just `take` against the mirror -- no compare.
 # The paddle's vertical extent does need a real comparison ("is the ball's y in
 # [py, py+24)?"), which is `inrange` from the standard library: two
 # lockstep-decrement phases.
@@ -69,7 +69,7 @@ bounceU: note 550 25                          # hit the top wall
          + bdy yEnd
 yEnd:
   # --- draw ---
-  inc screen/clear
+  give screen/clear
   clear screen/x                              # paddle: white 4 x 24 at (0, py)
   copy py screen/y
   clear screen/color
@@ -78,7 +78,7 @@ yEnd:
   addn 4 screen/rectw
   clear screen/recth
   addn 24 screen/recth
-  inc screen/rect
+  give screen/rect
   copy bx screen/x                            # ball: yellow 2 x 2 at (bx, by)
   copy by screen/y
   clear screen/color
@@ -87,10 +87,10 @@ yEnd:
   addn 2 screen/rectw
   clear screen/recth
   addn 2 screen/recth
-  inc screen/rect
-  inc screen/flush                            # blit, drain input, sleep to the next 60 Hz tick
+  give screen/rect
+  give screen/flush                            # blit, drain input, sleep to the next 60 Hz tick
   # --- input: drain every queued key this frame ---
-poll: deb kbd/event noKey gotKey
+poll: take kbd/event noKey gotKey
 noKey: - z frame
 gotKey: copy kbd/char k
   iseq k 113 flag                             # 'q' -> quit

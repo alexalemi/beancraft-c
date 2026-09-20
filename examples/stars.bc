@@ -15,19 +15,19 @@ use "std"                                          # clear, copy, addn, subn
 func updstar SPD X Y {                             # one star: move left by SPD, respawn if off-edge, plot
   subn SPD X                                       # X := max(0, X - SPD)
   - X resp peekX                                   # X == 0 (ran off the left edge)?  respawn : keep
-peekX: + X drw                                     #   X > 0: undo the deb's decrement, just draw
+peekX: + X drw                                     #   X > 0: undo the take's decrement, just draw
 resp:  copy screen/width X                         #   X := W - 1   (back to the right edge)
        subn 1 X
-       inc rand/next
+       give rand/next
        copy rand/byte Y                            #   Y := random row  (screen/plot wraps it mod H)
 drw:   copy X screen/x
        copy Y screen/y
-       inc screen/plot
+       give screen/plot
 }
 
 # --- per frame ---
 frame:
-  inc screen/clear
+  give screen/clear
   clear screen/color
   addn 240 screen/color                            # speed 1: dim, far
   updstar 1 x1 y1
@@ -43,6 +43,6 @@ frame:
   updstar 3 x7 y7
   updstar 3 x8 y8
   updstar 3 x9 y9
-  inc screen/flush
-  deb kbd/event frame quit
+  give screen/flush
+  take kbd/event frame quit
 quit:

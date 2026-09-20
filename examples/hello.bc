@@ -4,8 +4,8 @@ func addn N R {        # R += N   (N is a value argument, consumed; R aliases a 
   + R loop
 }
 addn 72 con/byte       # 'H'
-inc con/emit
+give con/emit
 addn 105 con/byte      # 'i'
-inc con/emit
+give con/emit
 addn 10 con/byte       # '\n'
-inc con/emit
+give con/emit

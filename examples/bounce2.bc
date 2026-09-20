@@ -24,8 +24,8 @@ i3: + diry frame                   # diry := 1
 frame:
   copy x screen/x
   copy y screen/y
-  inc screen/plot                  # plot pixel (x, y) in the current colour
-  inc screen/color                 # cycle the colour (mod 256 on plot)
+  give screen/plot                  # plot pixel (x, y) in the current colour
+  give screen/color                 # cycle the colour (mod 256 on plot)
 
   # bounce x within [0, W-1] using dirx (1=+, 0=-), invariant xleft = W-1-x
   - dirx mvLx mvRxd
@@ -47,6 +47,6 @@ mvLy:  - y flipRy goLy
 goLy:  + yleft endF
 flipRy: + diry endF
 
-endF:  inc screen/flush            # blit, drain input, sleep to next 60 Hz tick
-       deb kbd/event frame quit    # key pressed? no -> frame, yes -> quit
+endF:  give screen/flush            # blit, drain input, sleep to next 60 Hz tick
+       take kbd/event frame quit    # key pressed? no -> frame, yes -> quit
 quit:

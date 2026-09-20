@@ -4,7 +4,7 @@
 # Both the program AND the simulated registers are each a single Gödel-encoded
 # integer, so this runs ANY beancraft program with any number of registers and
 # any number of instructions.  The register list is grown on demand and indexed
-# by walking it, so it's slow -- every simulated `inc`/`deb` walks the list, and
+# by walking it, so it's slow -- every simulated `give`/`take` walks the list, and
 # the encoded numbers are astronomical -- fine for toy inputs, glacial for
 # anything real.  Run it with `-O`: every list pop/push folds to an O(1) bignum
 # op, but without `-O` a single pop is exponential in the encoded number's bit
@@ -14,7 +14,7 @@
 #   pair(x, y) = 2^x * (2y + 1)        -- always >= 1, so 0 unambiguously means []
 #   list([])   = 0 ;  list(h :: t) = pair(h, list(t))
 #   an instruction is FOUR consecutive list elements (t, r, g1, g2):
-#       t = 0 : inc s_r ;  PC := g1
+#       t = 0 : give s_r ;  PC := g1
 #       t = 1 : if s_r == 0 then PC := g1 else ( s_r-- ; PC := g2 )
 #       t = 2 : halt
 #   program   P = list([ t0, r0, g1_0, g2_0,  t1, r1, g1_1, g2_1,  ... ])
@@ -28,7 +28,7 @@
 # At halt the first eight simulated registers are unpacked into out0..out7 so the
 # result is readable; the machine itself handles arbitrarily many.
 
-# `done` / `halt` / `end` inside a `func` body mean "return to the caller".
+# `done` / `halt` / `stop` inside a `func` body mean "return to the caller".
 
 func clear X { - X done self }
 
@@ -63,7 +63,7 @@ func pop L X got {                         # head of list L -> X (the pair's exp
   clrG: - got chk self
   chk:  - L empty
   peek: + L peel
-  empty: end
+  empty: stop
   peel:  - L wasEven
          - L wasOdd
          + Z peel
@@ -137,8 +137,8 @@ step: copy P Pw                            # Pw := a fresh, consumable copy of t
       pop Pw g1 g1g
       pop Pw g2 g2g
 
-      - t isInc                             # t == 0 -> inc
-      - t isDeb                             # t == 1 -> deb
+      - t isInc                             # t == 0 -> give
+      - t isDeb                             # t == 1 -> take
       - z finish                            # t >= 2 -> halt
 
 isInc:  incReg r R                          # s_r := s_r + 1 ;  PC := g1
@@ -164,4 +164,4 @@ finish: pop R out0 fg0
         pop R out5 fg5
         pop R out6 fg6
         pop R out7 fg7
-        end
+        stop

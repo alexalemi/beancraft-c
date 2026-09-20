@@ -1,0 +1,86 @@
+# m2.bc -- the smallest universal machine I could fit: a two-counter (Minsky)
+# machine simulator.  Two counters plus "increment" and "jump-if-zero-else-
+# decrement" are already Turing-complete (Minsky 1961), so this runs ANY
+# computation -- given the program Gödel-encoded in `P` and the input encoded in
+# the counters.  It is deliberately tiny: there is no register list to walk (only
+# the two named counters `a` and `b`), instructions are 3-element tuples, and the
+# program counter `PC` counts list ELEMENTS, so the only loop on the fetch path
+# is "drop PC elements".  Compare examples/urm.bc, which simulates arbitrarily
+# many registers and is ~6x larger as a result.
+#
+# Encoding (lists via the pairing code, exactly like examples/urm.bc):
+#   pair(x, y) = 2^x * (2y + 1)        -- always >= 1, so 0 unambiguously means []
+#   list([])   = 0 ;  list(h :: t) = pair(h, list(t))
+#   an instruction is THREE consecutive list elements (t, x, y):
+#       t = 0 : a++ ;  PC := x                       (y ignored)
+#       t = 1 : b++ ;  PC := x                       (y ignored)
+#       t = 2 : if a == 0 then PC := x  else ( a-- ; PC := y )
+#       t = 3 : if b == 0 then PC := x  else ( b-- ; PC := y )
+#       t >= 4: halt
+#   program  P = list([ t0,x0,y0,  t1,x1,y1, ... ]) ;  PC starts at 0.
+#   `goto` targets are list-element indices (so multiples of 3); jumping past the
+#   end of the program halts.
+#
+# Run it with `-O` (like urm.bc: with -O every list pop folds to an O(1) bignum
+# op; without it a single pop is exponential in the encoded number's bit length):
+#   beancraft examples/m2.bc -O P=<prog> a=<input>
+# At halt the two counters are left in `a` and `b`.
+
+func copy From To {                        # To := From   (From preserved; tmp scratch)
+  - tmp clrTo self
+  clrTo: - To loop self
+  loop:  - From restore
+         + To
+         + tmp loop
+  restore: - tmp done
+           + From restore
+}
+
+func pop L X got {                         # head of list L -> X (the pair's exponent);
+  - X clrG self                            # L := the pair's second component.  [] -> X=0, got=0
+  clrG: - got chk self
+  chk:  - L empty
+  peek: + L peel
+  empty: stop
+  peel:  - L wasEven
+         - L wasOdd
+         + Z peel
+  wasEven: - Z bumpX
+           + L wasEven
+  bumpX: + X peel
+  wasOdd:  - Z setG
+           + L wasOdd
+  setG: + got done
+}
+
+# ===========================================================================
+# fetch / decode / execute
+# ===========================================================================
+
+step: copy P Pw                            # Pw := a fresh, consumable copy of the program
+      drop:  - PC getInst                  # discard PC list elements of Pw; leaves PC == 0
+             pop Pw t tg
+             - z drop
+      getInst: pop Pw t tg                 # read this instruction's fields (t, x, y)
+      - tg theEnd haveOp                    # tg == 0: walked past the end of the program -> halt
+      theEnd: - z finish
+      haveOp:  pop Pw x tg
+      pop Pw y tg
+
+      - t doIncA                            # t == 0 -> a++ ; PC := x
+      - t doIncB                            # t == 1 -> b++ ; PC := x
+      - t doDecA                            # t == 2 -> jump-if-zero-else-decrement a
+      - t doDecB                            # t == 3 -> jump-if-zero-else-decrement b
+      - z finish                            # t >= 4 -> halt
+
+doIncA: + a fromX
+doIncB: + b fromX
+doDecA: - a fromX fromY                     # a == 0 -> PC := x ;  else (a already--) PC := y
+doDecB: - b fromX fromY
+
+fromX:  - x step                            # PC := x ; goto step   (PC is already 0 here)
+        + PC fromX
+fromY:  - y step                            # PC := y ; goto step
+        + PC fromY
+
+finish: stop

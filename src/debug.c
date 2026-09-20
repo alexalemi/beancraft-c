@@ -11,20 +11,21 @@
 
 static const char *op_name(IrOptOp op) {
     switch (op) {
-    case IR_OPT_INC:      return "inc";
-    case IR_OPT_DEB:      return "deb";
-    case IR_OPT_END:      return "end";
+    case IR_OPT_INC:      return "give";
+    case IR_OPT_DEB:      return "take";
+    case IR_OPT_END:      return "stop";
     case IR_OPT_ZERO:     return "zero";
     case IR_OPT_TRANSFER: return "transfer";
     case IR_OPT_DIVMOD:   return "divmod";
     case IR_OPT_MULADD:   return "muladd";
     case IR_OPT_ISZERO:   return "iszero";
     case IR_OPT_COPY:     return "copy";
+    case IR_OPT_DIVBIN:   return "divbin";
     }
     return "?";
 }
 
-// Print one instruction line: "  >  12  label:  deb B -> z:14 nz:13".
+// Print one instruction line: "  >  12  label:  take B -> z:14 nz:13".
 static void print_inst(const InterpState *st, const IrProgram *prog, uint32_t pc) {
     const IrOptProgram *p = st->prog;
     if (pc >= p->inst_count) {
@@ -37,10 +38,10 @@ static void print_inst(const InterpState *st, const IrProgram *prog, uint32_t pc
     fprintf(stderr, "  %s %4u  %-12s ", pc == st->pc ? ">" : " ", pc, label);
     switch (in->op) {
     case IR_OPT_INC:
-        fprintf(stderr, "inc %s -> %u\n", p->reg_names[in->reg]->data, in->arg_a);
+        fprintf(stderr, "give %s -> %u\n", p->reg_names[in->reg]->data, in->arg_a);
         break;
     case IR_OPT_DEB:
-        fprintf(stderr, "deb %s -> z:%u nz:%u\n",
+        fprintf(stderr, "take %s -> z:%u nz:%u\n",
                 p->reg_names[in->reg]->data, in->arg_a, in->arg_b);
         break;
     case IR_OPT_END:

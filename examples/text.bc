@@ -32,7 +32,7 @@ func at X Y {                    # move the cursor: screen/x := X, screen/y := Y
 func putc C {                    # draw character C; screen/text advances x by 8 and zeroes glyph
   l: - C d
   + screen/glyph l
-  d: inc screen/text
+  d: give screen/text
 }
 
 # "BEANS" in bright cyan at (8, 8)
@@ -57,7 +57,7 @@ addn 255 screen/row4
 addn 254 screen/row5
 addn 12  screen/row6
 addn 8   screen/row7
-inc screen/sprite
+give screen/sprite
 
 # a green status bar across the bottom
 at 0 44
@@ -67,9 +67,9 @@ clear screen/rectw
 copy screen/width screen/rectw
 clear screen/recth
 addn 4 screen/recth
-inc screen/rect
+give screen/rect
 
-inc screen/flush
-wait: inc screen/flush
-      deb kbd/event wait quit
+give screen/flush
+wait: give screen/flush
+      take kbd/event wait quit
 quit:

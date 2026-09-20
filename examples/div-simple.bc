@@ -2,14 +2,14 @@
 # Dividend / Divisor = Quotient (remainder in Dividend)
 
 # First, save the original divisor
-save: deb Divisor loop
-      inc saved prev
+save: take Divisor loop
+      give saved prev
 
-loop: deb Dividend done
-      deb saved restore
-      inc Quotient loop
+loop: take Dividend done
+      take saved restore
+      give Quotient loop
       
-restore: deb saved loop
-         inc saved prev
+restore: take saved loop
+         give saved prev
 
-done: end
+done: stop

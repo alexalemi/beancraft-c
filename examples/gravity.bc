@@ -6,7 +6,7 @@
 # `bccompile --sdl`, in a window.
 #
 # Vertical position uses the mirror coordinate yr = H-1-y kept in sync with y, so
-# "at the floor" is `deb yr` against zero -- and moving vy pixels in one frame is
+# "at the floor" is `take yr` against zero -- and moving vy pixels in one frame is
 # just a vy-times loop of single-pixel steps, which makes overshoot impossible.
 
 use "std"                                          # clear, copy, addn, subn, half
@@ -65,7 +65,7 @@ mvXl:   - x flipXr goXl
 goXl:   + xr draw
 flipXr: + dx draw
 draw:
-  inc screen/clear
+  give screen/clear
   # floor: a 1 px green line across the bottom (y = H-1)
   clear screen/x
   copy screen/height screen/y
@@ -75,7 +75,7 @@ fl1: clear screen/color
   copy screen/width screen/rectw
   clear screen/recth
   addn 1 screen/recth
-  inc screen/rect
+  give screen/rect
   # the ball: a 3x3 cyan square at (x, y)
   copy x screen/x
   copy y screen/y
@@ -85,7 +85,7 @@ fl1: clear screen/color
   addn 3 screen/rectw
   clear screen/recth
   addn 3 screen/recth
-  inc screen/rect
-  inc screen/flush
-  deb kbd/event frame quit
+  give screen/rect
+  give screen/flush
+  take kbd/event frame quit
 quit:

@@ -40,27 +40,27 @@ func put2 N {                      # print N (0..99) as two ASCII digits.  Destr
   t0: addn 48 con/byte             # con/byte := '0'
       eq: - q ee
           + con/byte eq            # con/byte += q   (the tens digit)
-      ee: inc con/emit             # emit the tens digit
+      ee: give con/emit             # emit the tens digit
           addn 48 con/byte         # con/byte := '0'
           eo: - ones ef
               + con/byte eo        # con/byte += ones
-          ef: inc con/emit         # emit the ones digit
+          ef: give con/emit         # emit the ones digit
           ret:
 }
 
-inc time/now
+give time/now
 
 copy time/hour h
 put2 h
 addn 58 con/byte                   # ':'
-inc con/emit
+give con/emit
 
 copy time/min m
 put2 m
 addn 58 con/byte
-inc con/emit
+give con/emit
 
 copy time/sec s
 put2 s
 addn 10 con/byte                   # '\n'
-inc con/emit
+give con/emit

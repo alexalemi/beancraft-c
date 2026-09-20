@@ -12,7 +12,7 @@ func copy From To {
 
 copy n cnt
 go: - cnt done
-inc rand/next
+give rand/next
 copy rand/byte con/byte
-inc con/emit go
+give con/emit go
 done:

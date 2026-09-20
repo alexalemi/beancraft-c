@@ -13,9 +13,9 @@ typedef enum {
     TOK_NEWLINE,
 
     // Instructions
-    TOK_INC,          // 'inc' or '+'
-    TOK_DEB,          // 'deb' or '-'
-    TOK_END,          // 'end' or '.'
+    TOK_INC,          // 'give' or '+'   (legacy alias: 'inc')
+    TOK_DEB,          // 'take' or '-'   (legacy alias: 'deb')
+    TOK_END,          // 'stop' or '.'   (legacy alias: 'end')
     TOK_USE,          // 'use' or '%'
     TOK_FUNC,         // 'func'
 

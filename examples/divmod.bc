@@ -2,14 +2,14 @@
 # Copy B to temp, then repeatedly subtract
 
 # Copy divisor to temp for repeated subtraction
-copyB: deb B sub
-       inc temp prev
+copyB: take B sub
+       give temp prev
 
-sub: deb A done
-     deb temp restore
-     inc Quotient sub
+sub: take A done
+     take temp restore
+     give Quotient sub
 
-restore: deb Quotient done  
-         inc temp prev
+restore: take Quotient done  
+         give temp prev
 
-done: end
+done: stop

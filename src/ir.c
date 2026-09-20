@@ -352,13 +352,13 @@ void ir_print(const IrProgram *prog) {
 
         switch (inst->op) {
         case IR_INC:
-            printf("inc r%u -> %u\n", inst->reg, inst->arg_a);
+            printf("give r%u -> %u\n", inst->reg, inst->arg_a);
             break;
         case IR_DEB:
-            printf("deb r%u ? %u : %u\n", inst->reg, inst->arg_a, inst->arg_b);
+            printf("take r%u ? %u : %u\n", inst->reg, inst->arg_a, inst->arg_b);
             break;
         case IR_END:
-            printf("end\n");
+            printf("stop\n");
             break;
         }
     }

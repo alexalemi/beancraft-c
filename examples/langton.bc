@@ -13,7 +13,7 @@ use "std"                                          # clear, copy, addn, subn, mo
 
 # --- init: blank board; ant at (0,0) facing north (0=N, 1=E, 2=S, 3=W) ---
 # mirrors axr = W-1-ax, ayr = H-1-ay let the ant wrap at the edges with no compares
-inc screen/clear
+give screen/clear
 copy screen/width axr
 subn 1 axr
 copy screen/height ayr
@@ -27,18 +27,18 @@ bl: - burst doFlush bk
 bk:
   copy ax screen/x
   copy ay screen/y
-  inc screen/sample                                # screen/pixel := colour at (ax, ay)
+  give screen/sample                                # screen/pixel := colour at (ax, ay)
   - screen/pixel onBlack onWhite
 onWhite:                                            # on a white cell: turn right, paint black, step
   clear screen/color
-  inc screen/plot                                   # cell := 0
+  give screen/plot                                   # cell := 0
   + dir
   mod4 dir
   - z move
 onBlack:                                            # on a black cell: turn left, paint white, step
   clear screen/color
   addn 15 screen/color
-  inc screen/plot                                   # cell := 15 (white)
+  give screen/plot                                   # cell := 15 (white)
   addn 3 dir
   mod4 dir
 move:
@@ -71,6 +71,6 @@ wrapW: copy screen/width ax
        clear axr
 stepDone: - z bl
 doFlush:
-  inc screen/flush
-  deb kbd/event frame quit
+  give screen/flush
+  take kbd/event frame quit
 quit:

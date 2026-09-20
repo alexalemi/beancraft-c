@@ -2,4 +2,4 @@
 use "copy" From=4 To=four
 use "copy" From=100 To=hundred  
 use "copy" From=400 To=fourhundred
-end
+stop

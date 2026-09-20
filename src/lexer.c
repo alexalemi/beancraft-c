@@ -93,7 +93,14 @@ static Token make_error(const char *msg, uint32_t line, uint32_t col) {
 }
 
 static TokenKind check_keyword(const char *start, size_t len) {
-    // Check for instruction keywords
+    // Instruction keywords: give / take / stop (a bean goes into a bin, a bean
+    // comes out of a bin -- or can't -- and the machine stops). The older
+    // counter-machine spellings inc / deb / end are still accepted as aliases.
+    if (len == 4) {
+        if (memcmp(start, "give", 4) == 0) return TOK_INC;
+        if (memcmp(start, "take", 4) == 0) return TOK_DEB;
+        if (memcmp(start, "stop", 4) == 0) return TOK_END;
+    }
     if (len == 3) {
         if (memcmp(start, "inc", 3) == 0) return TOK_INC;
         if (memcmp(start, "deb", 3) == 0) return TOK_DEB;
@@ -302,9 +309,9 @@ const char *token_kind_name(TokenKind kind) {
     switch (kind) {
     case TOK_EOF:     return "end of file";
     case TOK_NEWLINE: return "newline";
-    case TOK_INC:     return "inc";
-    case TOK_DEB:     return "deb";
-    case TOK_END:     return "end";
+    case TOK_INC:     return "give";
+    case TOK_DEB:     return "take";
+    case TOK_END:     return "stop";
     case TOK_USE:     return "use";
     case TOK_FUNC:    return "func";
     case TOK_COLON:   return ":";

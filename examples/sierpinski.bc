@@ -3,7 +3,7 @@
 # it, plot the landing point.  Those points converge onto the Sierpinski gasket.
 # Press any key to quit.  (Runs much faster compiled: `bccompile -O examples/sierpinski.bc`.)
 #
-# Showcases the Random device (`inc rand/next` -> `rand/byte`) and the
+# Showcases the Random device (`give rand/next` -> `rand/byte`) and the
 # divide-by-constant optimisation -- the midpoint step is x := (x + vx) / 2, and
 # `half` in the standard library is exactly the loop the optimiser folds into one divmod.
 
@@ -24,7 +24,7 @@ h2: copy screen/height v2y
 h3: copy v0x x                                     # start the walker at V0
 copy v0y y
 
-inc screen/clear
+give screen/clear
 
 # --- the chaos game: 80 points per displayed frame ---
 frame:
@@ -33,7 +33,7 @@ frame:
 burstLoop:
   - burst doFlush bk                               # 80 points, then refresh the screen
 bk:
-  inc rand/next                                    # rand/byte := fresh random 0..255
+  give rand/next                                    # rand/byte := fresh random 0..255
   copy rand/byte r
   mod3 r                                           # r := 0, 1, or 2
   # vx,vy := the chosen corner; colour the point by which corner we jumped toward
@@ -60,9 +60,9 @@ mid:
   half y
   copy x screen/x
   copy y screen/y
-  inc screen/plot
+  give screen/plot
   - z burstLoop
 doFlush:
-  inc screen/flush
-  deb kbd/event frame quit
+  give screen/flush
+  take kbd/event frame quit
 quit:

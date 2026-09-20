@@ -6,7 +6,7 @@
 # The logo is 24 px wide (three glyphs) and 8 px tall; lx,ly is its top-left
 # corner.  As in bounce2.bc the bounce needs no comparisons -- mirror coordinates
 # lxr = W-24-lx and lyr = H-8-ly are kept in sync with lx,ly, so "at the right
-# wall" is just `deb lxr` against zero.
+# wall" is just `take lxr` against zero.
 
 use "std"                                          # clear, copy, addn, subn
 
@@ -30,7 +30,7 @@ hitRx:  - dirx bumpX bumpX                          #   hit right wall: dirx 1 -
 mvLx:   - lx hitLx goLx                             # at the left wall (lx==0)? bounce : move
 goLx:   + lxr updY                                 #   moved left: lxr++
 hitLx:  + dirx bumpX                                #   hit left wall: dirx 0 -> 1
-bumpX:  inc screen/color                            #   changed x direction -> next colour
+bumpX:  give screen/color                            #   changed x direction -> next colour
         - z updY
   # bounce y within [0, H-8] using diry, invariant lyr = H-8-ly
 updY:   - diry mvLy mvRyd
@@ -41,18 +41,18 @@ hitRy:  - diry bumpY bumpY
 mvLy:   - ly hitLy goLy
 goLy:   + lyr endF
 hitLy:  + diry bumpY
-bumpY:  inc screen/color
+bumpY:  give screen/color
         - z endF
   # draw "DVD" at (lx, ly) -- the text stream advances screen/x by 8 each glyph
-endF:   inc screen/clear
+endF:   give screen/clear
         copy lx screen/x
         copy ly screen/y
         addn 68 screen/glyph                        # 'D'
-        inc screen/text
+        give screen/text
         addn 86 screen/glyph                        # 'V'
-        inc screen/text
+        give screen/text
         addn 68 screen/glyph                        # 'D'
-        inc screen/text
-        inc screen/flush
-        deb kbd/event frame quit
+        give screen/text
+        give screen/flush
+        take kbd/event frame quit
 quit:

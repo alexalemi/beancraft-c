@@ -1,6 +1,6 @@
 # Check whether N is even -> Even (1 if even, 0 if odd)
-# Even starts at 1 and is flipped once per decrement of N: a single deb turns 1
-# into 0, and a deb-then-inc turns 0 back into 1.
+# Even starts at 1 and is flipped once per decrement of N: a single take turns 1
+# into 0, and a take-then-give turns 0 back into 1.
 
 clr: - Even setOne self
 setOne: + Even loop
