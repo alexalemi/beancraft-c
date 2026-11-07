@@ -88,8 +88,6 @@ void ir_print_dot(FILE *out, const IrProgram *prog, const char *title) {
           "  node  [fontname=\"Helvetica\", fontsize=11, margin=\"0.05,0.03\", width=0.5, height=0.5];\n"
           "  edge  [arrowsize=0.7];\n"
           "  start [shape=point, width=0.12];\n", out);
-    if (prog->inst_count) fputs("  start -> i0 [weight=8];\n", out);
-
     if (prog->inst_count) fprintf(out, "  start -> i%u [weight=8];\n", thread(prog, 0));
 
     for (uint32_t i = 0; i < prog->inst_count; i++) {
