@@ -1,0 +1,67 @@
+# The Collatz (3n+1) sequence starting from N:  print every term, then the number
+# of steps it took to reach 1 and the highest point it climbed to.
+#     n even -> n / 2        n odd -> 3n + 1
+#   ./beancraft -O examples/collatz.bc N=27
+#   27 82 41 124 62 31 94 47 142 71 214 107 322 161 484 242 121 364 182 91 ...  4 2 1
+#   111 steps, peak 9232
+# Whether this reaches 1 for every N is the Collatz conjecture -- open since 1937.
+# N is preserved; n, h, r, c are scratch.  N = 0 prints nothing.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+clear steps
+copy N n
+copy N peak
+- n done                          # N == 0: nothing to do
++ n
+
+loop:  printnum n
+       - n stop1                  # n == 1?  (take one, then see if anything is left)
+       - n one
+       + n
+       + n
+       putc 32                    # ' '
+       + steps
+       divmod n 2 h r             # n = 2h + r
+       clear n
+       - r even
+odd:   - h odd1                   # r == 1:  n := 3(2h + 1) + 1 = 6h + 4
+       + n
+       + n
+       + n
+       + n
+       + n
+       + n odd
+odd1:  addn 4 n
+       - r high high              # (goto high)
+even:  - h high                   # r == 0:  n := h
+       + n even
+
+high:  divmod peak n c r          # c := peak div n;  c == 0  <=>  peak < n
+       - c newPeak loop
+newPeak: copy n peak
+       - c loop loop              # (c is 0 here; "goto loop")
+
+one:   + n                        # n was exactly 1 (restore it)
+stop1: putc 10
+       printnum steps
+       putc 32
+       putc 115                   # s
+       putc 116                   # t
+       putc 101                   # e
+       putc 112                   # p
+       putc 115                   # s
+       putc 44                    # ,
+       putc 32
+       putc 112                   # p
+       putc 101                   # e
+       putc 97                    # a
+       putc 107                   # k
+       putc 32
+       printnum peak
+       putc 10

@@ -147,6 +147,47 @@ check "pow -O: 3^4 = 81" "Out=81" examples/pow.bc -O Base=3 Exp=4
 check "pow -O: 10^5 = 100000" "Out=100000" examples/pow.bc -O Base=10 Exp=5
 check "fib -O: fib(20) = 6765" "Out=6765" examples/fib.bc -O N=20
 check "gcd -O: gcd(48,18) = 6" "Out=6" examples/gcd.bc -O A=48 B=18
+check "euclid: gcd(48,18) = 6" "Out=6" examples/euclid.bc A=48 B=18
+check "euclid: gcd(0,5) = 5" "Out=5" examples/euclid.bc A=0 B=5
+check "euclid -O: gcd(1071,462) = 21" "Out=21" examples/euclid.bc -O A=1071 B=462
+check "euclid -O: gcd(fib50 * 7, fib49 * 7) = 7" "Out=7" examples/euclid.bc -O A=88103883175 B=54451194343
+check "isqrt: isqrt(0) = 0" "Out=0" examples/isqrt.bc N=0
+check "isqrt: isqrt(15) = 3" "Out=3" examples/isqrt.bc N=15
+check "isqrt: isqrt(16) = 4" "Out=4" examples/isqrt.bc N=16
+check "isqrt -O: isqrt(2*10^40) = 141421356237309504880" "Out=141421356237309504880" examples/isqrt.bc -O N=20000000000000000000000000000000000000000
+check "isqrt -O: isqrt(10^40 - 1) = 10^20 - 1" "Out=99999999999999999999" examples/isqrt.bc -O N=9999999999999999999999999999999999999999
+
+# --- programs that print: compare their console output ---
+check_out() {   # check_out "name" "expected stdout" command...
+    local name="$1" expected="$2"; shift 2
+    local actual; actual=$("$@" 2>&1)
+    if [ "$actual" = "$expected" ]; then
+        echo -e "${GREEN}PASS${NC}: $name"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC}: $name"
+        echo "  Expected: $expected"
+        echo "  Got:      $actual"
+        ((FAIL++))
+    fi
+}
+check_out "collatz N=6" "6 3 10 5 16 8 4 2 1
+8 steps, peak 16" "$BC" examples/collatz.bc N=6
+check_out "collatz -O N=27: 111 steps, peak 9232" "111 steps, peak 9232" bash -c "\"$BC\" -O examples/collatz.bc N=27 | tail -1"
+check_out "e -O: 1 digit" "2" "$BC" examples/e.bc -O N=1
+check_out "e -O: 60 digits" "2.71828182845904523536028747135266249775724709369995957496696" "$BC" examples/e.bc -O N=60
+check_out "pi -O: 1 digit" "3" "$BC" examples/pi.bc -O N=1
+check_out "pi -O: 60 digits" "3.14159265358979323846264338327950288419716939937510582097494" "$BC" examples/pi.bc -O N=60
+check_out "tictactoe: O wins when X wanders" "O wins" bash -c "printf '5\\n1\\n3\\n8\\n6\\n' | \"$BC\" examples/tictactoe.bc | tail -1"
+check_out "tictactoe: perfect play is a draw" "draw" bash -c "printf '5\\n3\\n4\\n2\\n9\\n' | \"$BC\" examples/tictactoe.bc | tail -1"
+check_out "guess: finds 43 in 4 questions" "Got it in 4 questions." bash -c "printf 'l\\nh\\nh\\ny\\n' | \"$BC\" examples/guess.bc | sed 's/.*: //' | tail -1"
+check_out "guess: catches contradictory answers" "Hmm, no number fits all your answers." bash -c "printf 'h\\nh\\nh\\nh\\nh\\nh\\nh\\nh\\n' | \"$BC\" examples/guess.bc | sed 's/.*: //' | tail -1"
+check_out "nim: punishes a slip from 3 5 7" "I took the last bean -- I win." bash -c "printf '1 1\\n2 2\\n3 1\\n3 1\\n' | \"$BC\" examples/nim.bc | tail -1"
+check_out "nim: perfect play from 3 5 7 wins" "You took the last bean -- you win!" bash -c "printf '1 1\\n3 3\\n2 1\\n3 1\\n3 1\\n3 1\\n3 1\\n' | \"$BC\" examples/nim.bc | tail -1"
+check_out "nim -O: huge heaps, the machine finds the move" "I take 999999999999999987660 from heap 1." bash -c "printf '2 5\\n' | \"$BC\" -O examples/nim.bc A=1000000000000000000000 B=12345 | grep -o 'I take.*'"
+check_out "wythoff: punishes a slip" "I took the last bean -- I win." bash -c "printf '1 1\\n0 3\\n0 4\\n' | \"$BC\" examples/wythoff.bc | tail -1"
+check_out "wythoff -O: huge heaps, onto a losing pair" "heaps:  1000000000000000000000  1618033988749894848205" bash -c "printf '0 1\\n' | \"$BC\" -O examples/wythoff.bc A=1000000000000000000000 B=2000000000000000000000 | grep '^heaps' | tail -1"
+check_out "hexapawn: 300 practice games run to completion" "now it's your turn." bash -c "\"$BC\" examples/hexapawn.bc T=300 </dev/null | grep -o \"now it's your turn.\""
 
 # --- urm.bc: the universal register machine (run a few small programs through it) ---
 echo

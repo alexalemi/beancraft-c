@@ -1,0 +1,453 @@
+# Nim against a machine that plays perfectly.  Three heaps of beans (default 3, 5,
+# 7; set your own with A=, B=, C=).  On your turn take any number of beans, at
+# least one, from one heap.  Whoever takes the last bean wins.  You go first.
+#   ./beancraft examples/nim.bc                      # type e.g. "3 2": take 2 from heap 3
+#   ./beancraft examples/nim.bc -O A=1000000000000000000000 B=12345678987654321 C=3
+#
+# The winning strategy is a theorem (Bouton, 1901), not a search: write the heaps
+# in binary and XOR them together.  If that "nim-sum" is 0, whoever is to move
+# loses against good play; if it isn't, there is a move that makes it 0 -- shrink
+# a heap h to h XOR sum, which is smaller than h exactly for the heaps that have
+# the sum's top bit set.  So the machine never looks ahead: it does a little binary
+# arithmetic.  XOR is built from halving (DIVMOD) and the comparisons from the sub
+# trick, so with -O it plays heaps of any size instantly.
+# From 3, 5, 7 the nim-sum is 1: you have a winning move.  Find it -- then never slip.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+func xor A B R {                  # R := A XOR B   (A, B preserved), one bit per round
+  clear R
+  copy A a
+  copy B b
+  clear p
+  + p                             # p = the current bit's value: 1, 2, 4, ...
+  l:   - a az                     # stop when a and b are both 0
+       + a bits
+  az:  - b done
+       + b bits
+  bits: divmod a 2 qa ra          # peel off the low bits
+       divmod b 2 qb rb
+       clear a
+  mva: - qa mvb
+       + a mva
+  mvb: clear b
+  mvb2: - qb sum
+       + b mvb2
+  sum: - rb one                   # ra + rb is 1 exactly when the bits differ
+       + ra
+  one: - ra dbl
+       - ra set dbl               # ra was 1: this bit of R is set
+  set: addr p R
+  dbl: copy p t                   # p := 2p
+       addr t p
+       - z l
+}
+
+
+- A dflt                          # no heaps given: 3, 5, 7
++ A start
+dflt:  - B dflt2
+       + B start
+dflt2: - C dflt3
+       + C start
+dflt3: addn 3 A
+       addn 5 B
+       addn 7 C
+
+start: putc 78                    # "Nim: take beans from one heap; whoever takes the last bean wins.\n"
+       putc 105
+       putc 109
+       putc 58
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 98
+       putc 101
+       putc 97
+       putc 110
+       putc 115
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 111
+       putc 110
+       putc 101
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 59
+       putc 32
+       putc 119
+       putc 104
+       putc 111
+       putc 101
+       putc 118
+       putc 101
+       putc 114
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 115
+       putc 32
+       putc 116
+       putc 104
+       putc 101
+       putc 32
+       putc 108
+       putc 97
+       putc 115
+       putc 116
+       putc 32
+       putc 98
+       putc 101
+       putc 97
+       putc 110
+       putc 32
+       putc 119
+       putc 105
+       putc 110
+       putc 115
+       putc 46
+       putc 10
+
+show:  putc 10                    # "\nheaps:  "
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 115
+       putc 58
+       putc 32
+       putc 32
+       printnum A
+       putc 32                    # "  "
+       putc 32
+       printnum B
+       putc 32                    # "  "
+       putc 32
+       printnum C
+       putc 10                    # "\nyour move (heap, how many): "
+       putc 121
+       putc 111
+       putc 117
+       putc 114
+       putc 32
+       putc 109
+       putc 111
+       putc 118
+       putc 101
+       putc 32
+       putc 40
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 44
+       putc 32
+       putc 104
+       putc 111
+       putc 119
+       putc 32
+       putc 109
+       putc 97
+       putc 110
+       putc 121
+       putc 41
+       putc 58
+       putc 32
+       readnum h eof
+       readnum n eof
+       - n bad                    # taking nothing isn't a move
+       + n
+       - h bad                    # which heap?
+       - h h1
+       - h h2
+       - h h3
+bad:   clear h
+       putc 116                   # "that's not a legal move"
+       putc 104
+       putc 97
+       putc 116
+       putc 39
+       putc 115
+       putc 32
+       putc 110
+       putc 111
+       putc 116
+       putc 32
+       putc 97
+       putc 32
+       putc 108
+       putc 101
+       putc 103
+       putc 97
+       putc 108
+       putc 32
+       putc 109
+       putc 111
+       putc 118
+       putc 101
+       - z show
+
+h1:    sub A n new bad            # more than the heap holds: not legal
+       copy new A
+       - z mine
+h2:    sub B n new bad
+       copy new B
+       - z mine
+h3:    sub C n new bad
+       copy new C
+
+mine:  - A notA                   # did you take the last bean?
+       + A think
+notA:  - B notB
+       + B think
+notB:  - C youWin
+       + C think
+
+think: xor A B s                  # s := the nim-sum
+       xor s C x
+       - x stall                  # 0: every move loses; take 1 and hope you slip
+       + x
+       xor A x y                  # find the heap h with  h XOR x < h,  and shrink it to that
+       sub A y d tryB
+       - d tryB
+       + d
+       copy y A
+       putc 73                    # "I take "
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       printnum d
+       putc 32                    # " from heap 1."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 49
+       putc 46
+       - z after
+tryB:  xor B x y
+       sub B y d tryC
+       - d tryC
+       + d
+       copy y B
+       putc 73                    # "I take "
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       printnum d
+       putc 32                    # " from heap 2."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 50
+       putc 46
+       - z after
+tryC:  xor C x y
+       sub C y d stall
+       copy y C
+       putc 73                    # "I take "
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       printnum d
+       putc 32                    # " from heap 3."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 51
+       putc 46
+       - z after
+
+stall: - A stB                    # a losing position: take one bean from the first heap with any
+       putc 73                    # "I take 1 from heap 1."
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 49
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 49
+       putc 46
+       - z after
+stB:   - B stC
+       putc 73                    # "I take 1 from heap 2."
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 49
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 50
+       putc 46
+       - z after
+stC:   - C after
+       putc 73                    # "I take 1 from heap 3."
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 49
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 51
+       putc 46
+
+after: - A notA2                  # did I take the last bean?
+       + A show
+notA2: - B notB2
+       + B show
+notB2: - C iWin
+       + C show
+
+youWin: putc 10                   # "\nYou took the last bean -- you win!\n"
+        putc 89
+        putc 111
+        putc 117
+        putc 32
+        putc 116
+        putc 111
+        putc 111
+        putc 107
+        putc 32
+        putc 116
+        putc 104
+        putc 101
+        putc 32
+        putc 108
+        putc 97
+        putc 115
+        putc 116
+        putc 32
+        putc 98
+        putc 101
+        putc 97
+        putc 110
+        putc 32
+        putc 45
+        putc 45
+        putc 32
+        putc 121
+        putc 111
+        putc 117
+        putc 32
+        putc 119
+        putc 105
+        putc 110
+        putc 33
+        putc 10
+       stop
+iWin:  putc 10                    # "\nI took the last bean -- I win.\n"
+       putc 73
+       putc 32
+       putc 116
+       putc 111
+       putc 111
+       putc 107
+       putc 32
+       putc 116
+       putc 104
+       putc 101
+       putc 32
+       putc 108
+       putc 97
+       putc 115
+       putc 116
+       putc 32
+       putc 98
+       putc 101
+       putc 97
+       putc 110
+       putc 32
+       putc 45
+       putc 45
+       putc 32
+       putc 73
+       putc 32
+       putc 119
+       putc 105
+       putc 110
+       putc 46
+       putc 10
+       stop
+eof:

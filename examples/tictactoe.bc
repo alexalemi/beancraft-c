@@ -1,0 +1,258 @@
+# Tic-tac-toe against a machine that never loses.  You are X and move first: type
+# a square 1-9 (laid out like a phone keypad) and Enter.  Run it interactively
+#   ./beancraft examples/tictactoe.bc
+# or feed it a game:  printf '5\n1\n3\n8\n6\n' | ./beancraft examples/tictactoe.bc
+#
+#    1 | 2 | 3        Each square is two bins, x_i and o_i (one bean = taken).
+#   ---+---+---       The machine (O) plays the first rule that applies:
+#    4 | 5 | 6          1. complete a line of its own            -> it wins
+#   ---+---+---         2. block a line of yours
+#    7 | 8 | 9          3. take the centre
+#                       4. you hold two opposite corners: take a side (not a corner!)
+#                       5. four fork-stoppers: you hold 6+8 / 6+7 / 8+1 / 8+3 -> 9, 9, 7, 9
+#                       6. a free corner (1, 3, 7, 9), else a free side (2, 4, 6, 8)
+# Rules 4-5 are the subtle part: without them X can set up a fork (two lines
+# threatened at once).  The rule list was checked against every possible game.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+func if1 R ~no {                  # fall through if R holds a bean, else jump to no  (R kept)
+  - R no
+  + R
+}
+
+func free X O ~no {               # fall through if the square is empty, else jump to no
+  - X ok
+  + X no
+  ok: - O done
+  + O no
+}
+
+func show X O CH {                # print 'X', 'O', or the square's digit CH
+  - X notX
+  + X
+  putc 88
+  - z done
+  notX: - O notO
+  + O
+  putc 79
+  - z done
+  notO: putc CH
+}
+
+func row XA OA A XB OB B XC OC C {        # " a | b | c\n"
+  putc 32
+  show XA OA A
+  putc 32
+  putc 124
+  putc 32
+  show XB OB B
+  putc 32
+  putc 124
+  putc 32
+  show XC OC C
+  putc 10
+}
+
+func rule {                       # "---+---+---\n"
+  putc 45
+  putc 45
+  putc 45
+  putc 43
+  putc 45
+  putc 45
+  putc 45
+  putc 43
+  putc 45
+  putc 45
+  putc 45
+  putc 10
+}
+
+# --- the rules -----------------------------------------------------------------
+func complete PA PB XC OC ~moved {        # PA, PB held and C empty: O takes C
+  if1 PA no
+  if1 PB no
+  free XC OC no
+  give OC moved
+  no:
+}
+
+func line PA PB PC XA XB XC OA OB OC ~moved {   # complete line ABC whichever square is open
+  complete PA PB XC OC moved
+  complete PB PC XA OA moved
+  complete PC PA XB OB moved
+}
+
+func take1 X O ~moved {           # O takes the square if it is free
+  free X O no
+  give O moved
+  no:
+}
+
+func three A B C ~yes {           # A, B, C all held: jump to yes
+  if1 A no
+  if1 B no
+  if1 C no
+  - z yes
+  no:
+}
+
+func won P0 P1 P2 P3 P4 P5 P6 P7 P8 ~yes {
+  three P0 P1 P2 yes
+  three P3 P4 P5 yes
+  three P6 P7 P8 yes
+  three P0 P3 P6 yes
+  three P1 P4 P7 yes
+  three P2 P5 P8 yes
+  three P0 P4 P8 yes
+  three P2 P4 P6 yes
+}
+
+# --- the game ------------------------------------------------------------------
+clear res
+clear turns
+addn 5 turns                      # X gets (at most) five moves
+
+show:   row x0 o0 49 x1 o1 50 x2 o2 51          # the board ...
+        rule
+        row x3 o3 52 x4 o4 53 x5 o5 54
+        rule
+        row x6 o6 55 x7 o7 56 x8 o8 57
+        putc 10
+        - res prompt                              # ... then: play on (res = 0),
+        - res draw                                #   or it's a draw (1),
+        - res oWins xWins                         #   O won (2), X won (3)
+prompt: putc 62                   # "> "
+        putc 32
+read:   - con/read eof            # one byte -> con/byte (EOF -> eof)
+        clear ch
+mvch:   - con/byte digit
+        + ch mvch
+digit:  subn 48 ch
+        - ch read                 # below '1' (newline, space, ...): ignore
+        - ch m0                   # ch is now the square's index 0..8
+        - ch m1
+        - ch m2
+        - ch m3
+        - ch m4
+        - ch m5
+        - ch m6
+        - ch m7
+        - ch m8
+bad:    clear ch                  # above '9', or an occupied square
+        putc 63                   # "?\n"
+        putc 10
+        - z prompt
+
+m0: free x0 o0 bad
+    + x0 moved
+m1: free x1 o1 bad
+    + x1 moved
+m2: free x2 o2 bad
+    + x2 moved
+m3: free x3 o3 bad
+    + x3 moved
+m4: free x4 o4 bad
+    + x4 moved
+m5: free x5 o5 bad
+    + x5 moved
+m6: free x6 o6 bad
+    + x6 moved
+m7: free x7 o7 bad
+    + x7 moved
+m8: free x8 o8 bad
+    + x8 moved
+
+moved:  won x0 x1 x2 x3 x4 x5 x6 x7 x8 youWin
+        - turns full
+        - turns full              # that was X's fifth move: the board is full
+        + turns
+
+# O's move, by the rules above
+# 1. win: a line with two O's and a gap
+        line o0 o1 o2 x0 x1 x2 o0 o1 o2 iWin
+        line o3 o4 o5 x3 x4 x5 o3 o4 o5 iWin
+        line o6 o7 o8 x6 x7 x8 o6 o7 o8 iWin
+        line o0 o3 o6 x0 x3 x6 o0 o3 o6 iWin
+        line o1 o4 o7 x1 x4 x7 o1 o4 o7 iWin
+        line o2 o5 o8 x2 x5 x8 o2 o5 o8 iWin
+        line o0 o4 o8 x0 x4 x8 o0 o4 o8 iWin
+        line o2 o4 o6 x2 x4 x6 o2 o4 o6 iWin
+# 2. block: a line with two X's and a gap
+        line x0 x1 x2 x0 x1 x2 o0 o1 o2 show
+        line x3 x4 x5 x3 x4 x5 o3 o4 o5 show
+        line x6 x7 x8 x6 x7 x8 o6 o7 o8 show
+        line x0 x3 x6 x0 x3 x6 o0 o3 o6 show
+        line x1 x4 x7 x1 x4 x7 o1 o4 o7 show
+        line x2 x5 x8 x2 x5 x8 o2 o5 o8 show
+        line x0 x4 x8 x0 x4 x8 o0 o4 o8 show
+        line x2 x4 x6 x2 x4 x6 o2 o4 o6 show
+# 3. centre
+        take1 x4 o4 show
+        if1 o4 corners                              # 4. opposite corners
+        if1 x0 diag2
+        if1 x8 diag2
+        - z sides
+diag2:  if1 x2 forks
+        if1 x6 forks
+        - z sides
+forks:  if1 x5 f2                                   # 5. fork-stoppers
+        if1 x7 f2
+        take1 x8 o8 show
+f2:     if1 x5 f3
+        if1 x6 f3
+        take1 x8 o8 show
+f3:     if1 x7 f4
+        if1 x0 f4
+        take1 x6 o6 show
+f4:     if1 x7 corners
+        if1 x2 corners
+        take1 x8 o8 show
+corners: take1 x0 o0 show                           # 6. corners, then sides
+        take1 x2 o2 show
+        take1 x6 o6 show
+        take1 x8 o8 show
+sides:  take1 x1 o1 show
+        take1 x3 o3 show
+        take1 x5 o5 show
+        take1 x7 o7 show
+
+full:   addn 1 res
+        - z show
+iWin:   addn 2 res
+        - z show
+youWin: addn 3 res
+        - z show
+
+draw:   putc 100                  # "draw\n"
+        putc 114
+        putc 97
+        putc 119
+        putc 10
+        stop
+
+oWins:  putc 79                   # "O wins\n"
+        putc 32
+        putc 119
+        putc 105
+        putc 110
+        putc 115
+        putc 10
+        stop
+
+xWins:  putc 88                   # "X wins\n"  (it can't happen)
+        putc 32
+        putc 119
+        putc 105
+        putc 110
+        putc 115
+        putc 10
+        stop
+
+eof:

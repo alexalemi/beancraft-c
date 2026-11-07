@@ -248,7 +248,7 @@ give con/emit
 
 A `use`d module that contains `func` definitions registers them so the importer
 (and anything *it* pulls in) can call them — `use "std"` brings in `clear`,
-`copy`, `addr`, `addn`, `subn`, `half`, `iseq`, `inrange`, `note`, … without
+`copy`, `addr`, `addn`, `subn`, `half`, `iseq`, `inrange`, `note`, `mul`, `divmod`, `sub`, `isqrt`, `printnum`, `readnum`, … without
 generating any code of its own. Functions can `use` other modules and call other
 functions; the loader keeps expanding until nothing is left but `give`/`take`/`stop`.
 

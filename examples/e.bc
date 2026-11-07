@@ -1,0 +1,72 @@
+# A spigot for e:  print the first N decimal digits of e (default 50).
+#   ./beancraft -O examples/e.bc N=100
+#   2.718281828459045235360287471352662497757247093699959574966967627724076630353547594571382178525166427
+#
+# e = 1 + 1/1 (1 + 1/2 (1 + 1/3 (1 + ...))), a tower of maps  y -> (1 + y)/k.
+# The machine keeps their composition so far as one fraction
+#     f(y) = (q*y + b) / t          (y = the rest of the tower, somewhere in [0, 1])
+# and alternates two moves (an unbounded spigot in the style of Gibbons, 2006):
+#   consume  the next term k:     f := f((1 + y)/k)   i.e.  b := b*k + q,  t := t*k
+#   produce  a digit, as soon as f(0) and f(1) agree on it: d = b div t is safe
+#            when (b mod t) + q < t; print d, then  f := 10*(f - d)  i.e.
+#            b := 10*(b mod t),  q := 10*q
+# Only five registers, each a growing bignum, and no arrays -- which is what lets
+# a counter machine run it.  Without -O every multiply and divide is done bean by
+# bean; with -O they fold to bignum ops (MULADD, DIVBIN) and a thousand digits
+# take a tenth of a second.  Change it to print forever by deleting the N countdown.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+func move From To {               # To := From, From := 0
+  clear To
+  l: - From done
+     + To l
+}
+
+- N dflt                          # N == 0 (not given): 50 digits
++ N init0
+dflt:  addn 50 N
+init0: clear k
+       clear q
+       clear b
+       clear t
+       + q                        # f(y) = (y + 1) / 1
+       + b
+       + t
+       clear first
+       + first                    # the first digit gets no '.' before it;
+       clear dot                  #   the second one does
+       + dot
+
+consume: + k
+         mul b k nb               # b := b*k + q
+         move nb b
+         addr q b
+         mul t k nt               # t := t*k
+         move nt t
+
+extract: divmod b t d r           # d := b div t,  r := b mod t
+         copy r s                 # is it safe?  s := r + q;  s < t  <=>  s div t == 0
+         addr q s
+         divmod s t c junk
+         - c digit consume        # not yet: consume another term
+
+digit:   - N fin                  # printed enough?
+         - first pdot pdig
+pdot:    - dot pdig
+         putc 46                  # '.'
+pdig:    addn 48 con/byte         # print '0' + d
+pd:      - d emit
+         + con/byte pd
+emit:    give con/emit
+         mul r 10 b               # b := 10*r
+         mul q 10 nq              # q := 10*q
+         move nq q
+         - c extract extract      # (c is 0 here; "goto extract")
+
+fin:     putc 10

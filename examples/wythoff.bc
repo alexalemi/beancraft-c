@@ -1,0 +1,427 @@
+# Wythoff's game against a machine that plays perfectly.  Two heaps of beans
+# (default 13 and 21; set your own with A=, B=).  On your turn take any number of
+# beans from one heap, or the same number from both.  Whoever takes the last bean
+# wins.  You go first, and from 13, 21 you have a winning move.
+#   ./beancraft examples/wythoff.bc            # type "a b": take a from heap 1, b from heap 2
+#   ./beancraft examples/wythoff.bc -O A=1000000000000000000000 B=2000000000000000000000
+#
+# The losing positions (Wythoff, 1907) are the pairs
+#     (a_k, b_k) = (floor(k*phi), floor(k*phi) + k),   phi = (1 + sqrt 5)/2
+#     (0,0) (1,2) (3,5) (4,7) (6,10) (8,13) (9,15) (11,18) (12,20) ...
+# and from anywhere else there is a move onto one.  With x <= y and d = y - x:
+#   x == a_d   you're on a losing pair: stall (take one bean) and hope
+#   x >  a_d   take x - a_d from both heaps -> (a_d, a_d + d)
+#   x <  a_d   x is some a_k or b_k with k < d: move y to b_k or to a_k
+# A counter machine has no phi, but it doesn't need one: floor(k*phi) is exactly
+#     (k + isqrt(5 k^2)) div 2
+# (isqrt is Newton's method, as in isqrt.bc), so the golden ratio is computed
+# from beans, exactly, as far as it is needed.  With -O this is quick at any size.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+func phi K R {                    # R := floor(K * phi) = (K + isqrt(5 K^2)) div 2   (K preserved)
+  mul K K k2
+  mul k2 5 k5
+  isqrt k5 s
+  copy K R
+  addr s R
+  half R
+}
+
+- A dflt                          # no heaps given: 13, 21
++ A start
+dflt:  - B dflt2
+       + B start
+dflt2: addn 13 A
+       addn 21 B
+
+start: putc 87                    # "Wythoff: take from one heap, or the same from both; taking the last bean wins.\n"
+       putc 121
+       putc 116
+       putc 104
+       putc 111
+       putc 102
+       putc 102
+       putc 58
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 111
+       putc 110
+       putc 101
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 44
+       putc 32
+       putc 111
+       putc 114
+       putc 32
+       putc 116
+       putc 104
+       putc 101
+       putc 32
+       putc 115
+       putc 97
+       putc 109
+       putc 101
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 98
+       putc 111
+       putc 116
+       putc 104
+       putc 59
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 105
+       putc 110
+       putc 103
+       putc 32
+       putc 116
+       putc 104
+       putc 101
+       putc 32
+       putc 108
+       putc 97
+       putc 115
+       putc 116
+       putc 32
+       putc 98
+       putc 101
+       putc 97
+       putc 110
+       putc 32
+       putc 119
+       putc 105
+       putc 110
+       putc 115
+       putc 46
+       putc 10
+
+show:  putc 10                    # "\nheaps:  "
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 115
+       putc 58
+       putc 32
+       putc 32
+       printnum A
+       putc 32                    # "  "
+       putc 32
+       printnum B
+       putc 10                    # "\nyour move (take from heap 1, take from heap 2): "
+       putc 121
+       putc 111
+       putc 117
+       putc 114
+       putc 32
+       putc 109
+       putc 111
+       putc 118
+       putc 101
+       putc 32
+       putc 40
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 49
+       putc 44
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 50
+       putc 41
+       putc 58
+       putc 32
+       readnum a eof
+       readnum b eof
+       sub A a na bad             # more than a heap holds: illegal
+       sub B b nb bad
+       - a az                     # a > 0:
+       + a
+       - b ok                     #   b = 0 is fine,
+       + b
+       sub a b e bad              #   otherwise a must equal b
+       - e ok
+       clear e
+bad:   putc 116                   # "that's not a legal move"
+       putc 104
+       putc 97
+       putc 116
+       putc 39
+       putc 115
+       putc 32
+       putc 110
+       putc 111
+       putc 116
+       putc 32
+       putc 97
+       putc 32
+       putc 108
+       putc 101
+       putc 103
+       putc 97
+       putc 108
+       putc 32
+       putc 109
+       putc 111
+       putc 118
+       putc 101
+       - z show
+az:    - b bad                    # a = 0: b must be > 0
+       + b
+ok:    copy na A
+       copy nb B
+       - A cA                     # did you take the last bean?
+       + A think
+cA:    - B youWin
+       + B think
+
+# --- the machine's move: (x, y) = the heaps in order; sw = 1 if heap 1 is the bigger
+think: clear sw
+       sub B A d swap             # d := y - x
+       copy A x
+       copy B y
+       - z ord
+swap:  sub A B d swap             # (can't underflow now)
+       copy B x
+       copy A y
+       + sw
+ord:   phi d ad                   # ad := a_d
+       sub x ad e low             # x < a_d -> low
+       - e stall                  # x == a_d: a losing pair
+       + e
+       copy ad nx                 # x > a_d: take e from both
+       sub y e ny bug
+       - z apply
+
+low:   phi x px                   # k := floor(x / phi) = floor(x*phi) - x
+       sub px x k bug
+       phi k v                    # is x = a_k for k or k+1?  then y -> b_k = x + k
+       sub x v e tryA2
+       - e isA
+tryA2: + k
+       phi k v
+       sub x v e isB
+       - e isA
+isB:   copy x k                   # x = b_k for k = floor(x / phi^2) = 2x - floor(x*phi) - 1, or k+1;
+       addr x k                   #   then y -> a_k
+       sub k px k bug
+       - k bug
+       phi k v
+       copy v w
+       addr k w
+       sub x w e tryB2
+       - e found
+tryB2: + k
+       phi k v
+       copy v w
+       addr k w
+       sub x w e bug
+       - e found
+bug:   - z stall                  # (unreachable)
+found: copy x nx
+       copy v ny
+       - z apply
+isA:   copy x nx
+       copy x ny
+       addr k ny
+       - z apply
+
+stall: copy x nx                  # take one bean from the bigger heap
+       copy y ny
+       - ny apply apply
+
+apply: - sw noSw                  # back to heap order: (na, nb) := the new heaps
+       copy ny na
+       copy nx nb
+       - z takes
+noSw:  copy nx na
+       copy ny nb
+takes: sub A na ta bug            # what's being taken from each
+       sub B nb tb bug
+       copy na A
+       copy nb B
+       putc 73                    # "I take "
+       putc 32
+       putc 116
+       putc 97
+       putc 107
+       putc 101
+       putc 32
+       - ta only2
+       + ta
+       printnum ta
+       - tb only1
+       putc 32                    # " from both heaps."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 98
+       putc 111
+       putc 116
+       putc 104
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 115
+       putc 46
+       - z after
+only1: putc 32                    # " from heap 1."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 49
+       putc 46
+       - z after
+only2: printnum tb
+       putc 32                    # " from heap 2."
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 104
+       putc 101
+       putc 97
+       putc 112
+       putc 32
+       putc 50
+       putc 46
+
+after: - A cA2                    # did I take the last bean?
+       + A show
+cA2:   - B iWin
+       + B show
+
+youWin: putc 10                   # "\nYou took the last bean -- you win!\n"
+        putc 89
+        putc 111
+        putc 117
+        putc 32
+        putc 116
+        putc 111
+        putc 111
+        putc 107
+        putc 32
+        putc 116
+        putc 104
+        putc 101
+        putc 32
+        putc 108
+        putc 97
+        putc 115
+        putc 116
+        putc 32
+        putc 98
+        putc 101
+        putc 97
+        putc 110
+        putc 32
+        putc 45
+        putc 45
+        putc 32
+        putc 121
+        putc 111
+        putc 117
+        putc 32
+        putc 119
+        putc 105
+        putc 110
+        putc 33
+        putc 10
+       stop
+iWin:  putc 10                    # "\nI took the last bean -- I win.\n"
+       putc 73
+       putc 32
+       putc 116
+       putc 111
+       putc 111
+       putc 107
+       putc 32
+       putc 116
+       putc 104
+       putc 101
+       putc 32
+       putc 108
+       putc 97
+       putc 115
+       putc 116
+       putc 32
+       putc 98
+       putc 101
+       putc 97
+       putc 110
+       putc 32
+       putc 45
+       putc 45
+       putc 32
+       putc 73
+       putc 32
+       putc 119
+       putc 105
+       putc 110
+       putc 46
+       putc 10
+       stop
+eof:

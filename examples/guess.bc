@@ -1,0 +1,232 @@
+# Guess my number -- or rather, the machine guesses yours.  Think of a number from
+# 1 to N (default 100) and answer each guess with h (higher), l (lower) or y (yes).
+#   ./beancraft examples/guess.bc                 # 1..100: at most 7 questions
+#   ./beancraft examples/guess.bc -O N=1000000000000000000000000000000
+#                                                 # 1..10^30: at most 100 questions
+# It keeps the range [lo, hi] your number must be in and always asks about the
+# middle, so each answer halves the range: binary search.  If the range ever
+# empties, your answers contradicted each other, and it says so.
+# lo, hi, g, k, m, c, ch, tries are scratch.
+
+use "std"
+
+func putc C {                     # print the character with code C
+  addn C con/byte
+  give con/emit
+}
+
+- N dflt                          # N not given: 1..100
++ N start
+dflt:  addn 100 N
+
+start: clear lo
+       + lo                       # [lo, hi] = [1, N]
+       copy N hi
+       clear tries
+       clear k                    # k := the number of bits in N  (= the most questions needed)
+       copy N m
+bits:  - m intro
+       + m
+       half m
+       + k bits
+
+intro: putc 84                    # "Think of a number from 1 to "
+       putc 104
+       putc 105
+       putc 110
+       putc 107
+       putc 32
+       putc 111
+       putc 102
+       putc 32
+       putc 97
+       putc 32
+       putc 110
+       putc 117
+       putc 109
+       putc 98
+       putc 101
+       putc 114
+       putc 32
+       putc 102
+       putc 114
+       putc 111
+       putc 109
+       putc 32
+       putc 49
+       putc 32
+       putc 116
+       putc 111
+       putc 32
+       printnum N
+       putc 46                    # ". I need at most "
+       putc 32
+       putc 73
+       putc 32
+       putc 110
+       putc 101
+       putc 101
+       putc 100
+       putc 32
+       putc 97
+       putc 116
+       putc 32
+       putc 109
+       putc 111
+       putc 115
+       putc 116
+       putc 32
+       printnum k
+       putc 32                    # " questions.\n"
+       putc 113
+       putc 117
+       putc 101
+       putc 115
+       putc 116
+       putc 105
+       putc 111
+       putc 110
+       putc 115
+       putc 46
+       putc 10
+
+ask:   sub hi lo g cheat          # hi < lo: the range is empty
+       copy lo g                  # g := (lo + hi) div 2
+       addr hi g
+       half g
+       + tries
+       putc 73                    # "Is it "
+       putc 115
+       putc 32
+       putc 105
+       putc 116
+       putc 32
+       printnum g
+       putc 63                    # "? (h)igher, (l)ower or (y)es: "
+       putc 32
+       putc 40
+       putc 104
+       putc 41
+       putc 105
+       putc 103
+       putc 104
+       putc 101
+       putc 114
+       putc 44
+       putc 32
+       putc 40
+       putc 108
+       putc 41
+       putc 111
+       putc 119
+       putc 101
+       putc 114
+       putc 32
+       putc 111
+       putc 114
+       putc 32
+       putc 40
+       putc 121
+       putc 41
+       putc 101
+       putc 115
+       putc 58
+       putc 32
+
+key:   - con/read eof             # read a key
+       clear ch
+mvch:  - con/byte disp
+       + ch mvch
+disp:  subn 103 ch                # ch := key - 103, so 'h' = 1, 'l' = 5, 'y' = 18
+       - ch key                   # anything up to 'g' (newline, space, ...): ignore
+       - ch higher                # 'h'
+       - ch ignore                # i j k
+       - ch ignore
+       - ch ignore
+       - ch lower                 # 'l'
+       - ch ignore                # m n o p q r s t u v w x
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch ignore
+       - ch yes                   # 'y'
+ignore: clear ch
+       - ch key key
+
+higher: copy g lo                 # lo := g + 1
+       + lo ask
+lower: copy g hi                  # hi := g - 1   (g >= lo >= 1)
+       - hi ask ask
+
+yes:   putc 71                    # "Got it in "
+       putc 111
+       putc 116
+       putc 32
+       putc 105
+       putc 116
+       putc 32
+       putc 105
+       putc 110
+       putc 32
+       printnum tries
+       putc 32                    # " questions.\n"
+       putc 113
+       putc 117
+       putc 101
+       putc 115
+       putc 116
+       putc 105
+       putc 111
+       putc 110
+       putc 115
+       putc 46
+       putc 10
+       stop
+
+cheat: putc 72                    # "Hmm, no number fits all your answers.\n"
+       putc 109
+       putc 109
+       putc 44
+       putc 32
+       putc 110
+       putc 111
+       putc 32
+       putc 110
+       putc 117
+       putc 109
+       putc 98
+       putc 101
+       putc 114
+       putc 32
+       putc 102
+       putc 105
+       putc 116
+       putc 115
+       putc 32
+       putc 97
+       putc 108
+       putc 108
+       putc 32
+       putc 121
+       putc 111
+       putc 117
+       putc 114
+       putc 32
+       putc 97
+       putc 110
+       putc 115
+       putc 119
+       putc 101
+       putc 114
+       putc 115
+       putc 46
+       putc 10
+
+eof:

@@ -1,0 +1,24 @@
+# Greatest common divisor of A and B -> Out, by Euclid's algorithm with remainders:
+#   while B > 0:  (A, B) := (B, A mod B)
+# gcd.bc does the same job by repeated subtraction, which takes about max(A,B)/gcd
+# rounds; this takes O(log min(A,B)) rounds, and with -O each round's division is
+# one folded DIVBIN, so it is quick on numbers of any size:
+#   ./beancraft -O examples/euclid.bc A=1071 B=462                      -> Out = 21
+#   ./beancraft -O examples/euclid.bc A=20365011074 B=12586269025      (Fibonacci neighbours: the worst case)
+# A, B are consumed; q, r are scratch.
+
+use "std"
+
+clear Out
+
+loop:  - B result                 # B == 0: A is the gcd
+       + B
+       divmod A B q r             # r := A mod B
+       clear A
+toA:   - B toB                    # A := B
+       + A toA
+toB:   - r loop                   # B := r
+       + B toB
+
+result: - A done
+        + Out result

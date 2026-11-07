@@ -14,6 +14,17 @@
 #   iseq A B R           R := 1 if A == B else 0  (A, B consumed)
 #   inrange A B SPAN R   R := 1 if B <= A < B+SPAN else 0   (A, B preserved; SPAN consumed)
 #   note FREQ MS         queue a square-wave tone (audio device; FREQ, MS consumed)
+#   mul A B R            R := A * B               (A, B preserved; R distinct from both)
+#   divmod N D Q REM     Q := N div D, REM := N mod D   (N, D preserved; D == 0 gives Q := 0, REM := N)
+#   printnum N           print N in decimal on the console (N preserved)
+#   sub A B R ~under     R := A - B; if B > A, R := 0 and jump to under   (A, B preserved)
+#   isqrt N R            R := floor(sqrt(N))      (N preserved)
+#   readnum N ~eof       N := the next decimal number typed on the console, skipping
+#                        anything that isn't a digit; EOF before a digit -> jump to eof
+#
+# mul, divmod and sub are written in exactly the shapes the -O optimizer folds (MULADD,
+# DIVBIN), so with -O each is a handful of bignum operations whatever the size of
+# the numbers; without -O they cost on the order of A*B and N steps.
 
 func clear X { - X done self }
 
@@ -119,4 +130,119 @@ func inrange A B SPAN R {                           # R := 1 if B <= A < B+SPAN 
   c3:   - c done c4                                # c hits 0 while a>0 -> A-B >= SPAN -> not in range
   c4:   - z c2
   yes:  + R
+}
+
+func mul A B R {                                   # R := A * B   (A, B preserved)
+  clear R
+  clear tmp
+  copy B c
+  l: - c done                                      # c times:  R += A  (A restored through tmp)
+  a: - A r
+     + R
+     + tmp a
+  r: - tmp l
+     + A r
+}
+
+func divmod N D Q REM {                            # Q := N div D, REM := N mod D  (N, D preserved)
+  clear Q
+  copy N n
+  copy D d
+  - d byZero                                       # D == 0: no division to do
+  + d z
+  z: - REM next self                               # REM := 0
+  s: - d full                                      # take a bean from d and one from n together,
+     - n done                                      #   counting the pairs in REM;
+     + REM s
+  full: - REM q                                    # d ran dry: a whole D came out of n, so pour
+        + d full                                   #   REM back into d and count one in Q
+  q:    + Q s
+  byZero: copy N REM
+}
+
+func printnum N {                                  # print N in decimal (N preserved)
+  copy N n
+  clear stk                                        # the digits, last first, as base-11 "digit+1"s
+  push: divmod n 10 q r                            #   (so a 0 digit is a 1 and no zero gets lost)
+        mul stk 11 t
+        - stk mvT self
+  mvT:  - t addR
+        + stk mvT
+  addR: - r more
+        + stk addR
+  more: + stk                                      # the +1
+        - n mvQ self
+  mvQ:  - q again
+        + n mvQ
+  again: - n pop                                   # loop while n > 0  (so N == 0 still prints "0")
+         + n push
+  pop:  divmod stk 11 q r                          # r = digit+1
+        - stk mvQ2 self
+  mvQ2: - q emit
+        + stk mvQ2
+  emit: addn 47 con/byte
+  dig:  - r out
+        + con/byte dig
+  out:  give con/emit
+        - stk done
+        + stk pop
+}
+
+func sub A B R ~under {                            # R := A - B, or jump to under if B > A
+  clear q                                          # The divmod loop again, dividing B by A+1:
+  copy A p                                         #   it takes beans from p = A+1 and B in
+  + p                                              #   lockstep, so if B <= A it stops with
+  copy B b                                         #   p = A - B left over (and q = 0); if
+  z: - rem next self                               #   B > A, p runs dry first and q counts it.
+  s: - p full
+     - b out
+     + rem s
+  full: - rem qq
+        + p full
+  qq:   + q s
+  out:  clear R
+  mv:   - p chk
+        + R mv
+  chk:  - q done
+        clear R
+        - q under under
+}
+
+func isqrt N R {                                   # R := floor(sqrt(N))   (Newton; see isqrt.bc)
+  clear R
+  - N done
+  + N
+  copy N x
+  l: divmod N x t r
+     divmod t x c r
+     - c st
+     copy x R
+     - c done done
+  st: - t h
+      + x st
+  h:  half x
+      - c l l
+}
+
+func readnum N ~eof {                              # N := next number on the console
+  clear N
+  skip: - con/read eof                             # skip to the first digit
+        clear ch
+  mv1:  - con/byte chk1
+        + ch mv1
+  chk1: inrange ch 48 10 isd
+        - isd skip
+  dig:  mul N 10 t                                 # N := 10*N + digit
+        clear N
+  mvt:  - t addd
+        + N mvt
+  addd: subn 48 ch
+  mvd:  - ch more
+        + N mvd
+  more: - con/read done                            # EOF ends the number too
+  mv2:  - con/byte chk2
+        + ch mv2
+  chk2: inrange ch 48 10 isd
+        - isd fin dig                              # a non-digit ends it (and is eaten)
+  fin:  clear ch
 }

@@ -1,0 +1,32 @@
+# Integer square root:  Out := floor(sqrt(N))   (N preserved)
+#
+# Newton's method on integers.  Start from x = N (too big) and repeat
+#     x := (x + N div x) div 2
+# which strictly decreases x until it lands on floor(sqrt(N)).  The new x is
+# smaller than the old exactly when N div x < x, so that is the test for "keep
+# going"; and "t < x" is checked by dividing again: t div x == 0.
+#
+# Every step is a folded divide (DIVBIN), halve (DIVMOD) or copy, and there are
+# O(log N) rounds, so with -O it handles numbers of any size:
+#   ./beancraft -O examples/isqrt.bc N=1000000          -> Out = 1000
+#   ./beancraft -O examples/isqrt.bc N=2000000000000000000000000000000000000000
+#                                                       -> Out = 44721359549995793928  (sqrt 2, 20 digits)
+# x, t, c, r are scratch.
+
+use "std"
+
+clear Out
+- N done                          # sqrt(0) = 0
++ N
+copy N x                          # x := N
+
+loop:  divmod N x t r             # t := N div x
+       divmod t x c r             # c := t div x    (c == 0  <=>  t < x)
+       - c step                   # t < x: Newton's step will improve x
+       copy x Out                 # t >= x: x is the answer
+       stop
+
+step:  - t halve                  # x := (x + t) div 2
+       + x step
+halve: half x
+       - c loop loop              # (c is 0 here; this is just "goto loop")
